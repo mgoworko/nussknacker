@@ -41,7 +41,7 @@ export function FixedValuesSetting({
 
     const presetListOptions: Option[] = Object.keys(fixedValuesPresets ?? {}).map((key) => ({ label: key, value: key }));
 
-    const selectedPresetValueExpressions: Option[] = (fixedValuesPresets?.[fixedValuesListPresetId] ?? []).map(
+    const selectedPresetValueExpressions: Option[] = (fixedValuesPresets?.[fixedValuesListPresetId]?.values ?? []).map(
         (selectedPresetValueExpression) => ({ label: selectedPresetValueExpression.label, value: selectedPresetValueExpression.label }),
     );
 
@@ -53,7 +53,7 @@ export function FixedValuesSetting({
                     <TypeSelect
                         readOnly={readOnly}
                         onChange={(value) => {
-                            onChange(`${path}.fixedValuesListPresetId`, value);
+                            onChange(`${path}.valueEditor.fixedValuesPresetId`, value);
                             onChange(`${path}.initialValue`, null);
                         }}
                         value={presetListOptions.find((presetListOption) => presetListOption.value === fixedValuesListPresetId)}

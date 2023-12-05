@@ -63,19 +63,61 @@ describe("Fragment", () => {
         cy.get("[data-testid='settings:4']").find("[type='ERROR']").should("be.visible");
         cy.get("[data-testid='settings:4']").contains("This field has to be unique");
 
-        // Provide String Any with Suggestion Value inputMode
+        // Provide String Fixed Value inputMode
         cy.get("@window").contains("+").click();
         cy.get("[data-testid='fieldsRow:5']").find("[placeholder='Field name']").type("name_string_fixed");
         toggleSettings(5);
         cy.get("[data-testid='settings:5']").contains("Any value").click();
         cy.get("[id$='option-0']").click({ force: true });
+
+        // Provide #meta.processName list item
         cy.get("[data-testid='settings:5']").find("[id='ace-editor']").type("#meta.processName");
         cy.get("[data-testid='settings:5']").contains("Typing...").should("not.exist");
         cy.get("[data-testid='settings:5']").find("[id='ace-editor']").type("{enter}");
         cy.get("[data-testid='settings:5']").find("[role='button']").contains("#meta.processName");
+
+        // Provide "'string'" list item
+        cy.get("[data-testid='settings:5']").find("[id='ace-editor']").type("'string'");
+        cy.get("[data-testid='settings:5']").contains("Typing...").should("not.exist");
+        cy.get("[data-testid='settings:5']").find("[id='ace-editor']").type("{enter}");
+        cy.get("[data-testid='settings:5']").find("[role='button']").contains("'string'");
+
+        // remove user list item
+        cy.get("[data-testid='settings:5']").find("[data-testid='CancelIcon']").eq(1).click();
+
+        // change input mode to any
+        cy.get("[data-testid='settings:5']").contains("Fixed list").click();
+        cy.get("[id$='option-2']").click({ force: true });
+
+        // Back to Fixed list input mode
+        cy.get("[data-testid='settings:5']").contains("Any value").click();
+        cy.get("[id$='option-0']").click({ force: true });
+
+        // Check if removed list item not available
+        cy.get("[data-testid='settings:5']").find("[role='button']").contains("'string'").should("not.exist");
+
+        cy.get("[data-testid='settings:5']").find("textarea").eq(1).type("Hint text test");
         cy.get("[data-testid='settings:5']").find("[aria-label='type-select']").eq(1).click();
         cy.get("[id$='option-1']").click({ force: true });
-        cy.get("[data-testid='settings:5']").find("textarea").eq(1).type("Hint text test");
+
+        cy.get("[data-testid='settings:5']").find("[class*='singleValue']").contains("#meta.processName");
+
+        // Change FixedValuesType to Preset
+        cy.get("[data-testid='settings:5']").find("[value='ValueInputWithFixedValuesPreset']").click();
+
+        // Initial value should be reset
+        cy.get("[data-testid='settings:5']").find("[class*='singleValue']").contains("#meta.processName").should("not.exist");
+
+        // Select preset
+        cy.get("[data-testid='settings:5']").find("[aria-label='type-select']").eq(1).click();
+        cy.get("[id$='option-1']").click({ force: true });
+        cy.get("[data-testid='settings:5']").find("[class^='MuiChip-label']").contains("string1");
+        cy.get("[data-testid='settings:5']").find("[class^='MuiChip-label']").contains("string2");
+
+        // Select initial value
+        cy.get("[data-testid='settings:5']").find("[aria-label='type-select']").eq(2).click();
+        cy.get("[id$='option-1']").click({ force: true });
+        cy.get("[data-testid='settings:5']").find("[class*='singleValue']").contains("string1");
 
         // Provide non String or Boolean Any Value inputMode
         cy.get("@window").contains("+").click();
@@ -114,8 +156,10 @@ describe("Fragment", () => {
         cy.get("[data-testid=window]").matchImage();
 
         cy.get('[title="name_string_any_with_suggestion"]').siblings().eq(0).find('[title="Switch to expression mode"]');
-        cy.get('[title="name_string_fixed"]').siblings().eq(0).contains("#meta.processName");
+
+        cy.get('[title="name_string_fixed"]').siblings().eq(0).contains("string1");
         cy.get('[title="name_string_fixed"]').find('[title="Hint text test"]').should("be.visible");
+
         cy.get('[title="non_boolean_or_string"]').siblings().eq(0).contains("1");
 
         cy.get("[data-testid=window]").find("input[value=testOutput]").type("{selectall}fragmentResult");

@@ -7,6 +7,7 @@ import { SettingLabelStyled, SettingRow } from "../fields/StyledSettingsComponne
 import { TextAreaNodeWithFocus } from "../../../../../../withFocus";
 import { FixedValuesPresets, VariableTypes } from "../../../../../../../types";
 import { Error } from "../../../../editors/Validators";
+import { FixedValuesGroup } from "../fields/FixedValuesGroup";
 
 interface Props {
     item: FixedListParameterVariant;
@@ -21,7 +22,7 @@ interface Props {
 export const FixedListVariant = ({ item, path, onChange, fixedValuesPresets, readOnly, variableTypes, fieldsErrors }: Props) => {
     const { t } = useTranslation();
 
-    const presetListItemOptions = fixedValuesPresets?.[item.fixedValuesListPresetId] ?? [];
+    const presetListItemOptions = fixedValuesPresets?.[item.valueEditor.fixedValuesPresetId]?.values ?? [];
 
     const fixedValuesList = item.valueEditor.fixedValuesList ?? [];
 
@@ -29,7 +30,7 @@ export const FixedListVariant = ({ item, path, onChange, fixedValuesPresets, rea
 
     return (
         <>
-            {/*<FixedValuesGroup fixedValuesType={fixedValuesType} path={path} onChange={onChange} readOnly={readOnly} />*/}
+            <FixedValuesGroup fixedValuesType={fixedValuesType} path={path} onChange={onChange} readOnly={readOnly} />
             <FixedValuesSetting
                 path={path}
                 onChange={onChange}
@@ -37,7 +38,7 @@ export const FixedListVariant = ({ item, path, onChange, fixedValuesPresets, rea
                 presetSelection={item.presetSelection}
                 fixedValuesList={fixedValuesList}
                 fixedValuesPresets={fixedValuesPresets}
-                fixedValuesListPresetId={item.fixedValuesListPresetId}
+                fixedValuesListPresetId={item.valueEditor.fixedValuesPresetId}
                 readOnly={readOnly}
                 variableTypes={variableTypes}
                 fieldsErrors={fieldsErrors}

@@ -50,12 +50,10 @@ export interface DefaultParameterVariant extends GenericParameterVariant, Fragme
 
 export interface FixedListParameterVariant extends GenericParameterVariant {
     valueEditor: ValueEditor;
-    fixedValuesListPresetId: string;
     presetSelection?: string;
 }
 export interface AnyValueWithSuggestionsParameterVariant extends GenericParameterVariant, FragmentValidation {
     valueEditor: ValueEditor;
-    fixedValuesListPresetId: string;
     presetSelection?: string;
 }
 export interface AnyValueParameterVariant extends GenericParameterVariant, FragmentValidation {

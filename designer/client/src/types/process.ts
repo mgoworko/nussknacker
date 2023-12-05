@@ -67,7 +67,8 @@ export interface ProcessDefinition {
 
 export type ComponentsConfig = Record<string, SingleComponentConfig>;
 
-export type FixedValuesPresets = Record<string, FixedValuesOption[]>;
+type FixedValuesPreset = { refClazzName: string; values: FixedValuesOption[] };
+export type FixedValuesPresets = Record<string, FixedValuesPreset>;
 
 export interface ProcessDefinitionData {
     componentsConfig?: ComponentsConfig;

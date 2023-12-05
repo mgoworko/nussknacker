@@ -82,7 +82,25 @@ export function reducer(state: SettingsState = initialState, action: Action): Se
         case "PROCESS_DEFINITION_DATA": {
             return {
                 ...state,
-                processDefinitionData: action.processDefinitionData,
+                processDefinitionData: {
+                    ...action.processDefinitionData,
+                    fixedValuesPresets: {
+                        presetBoolean: {
+                            refClazzName: "java.lang.Boolean",
+                            values: [
+                                { label: "ON", expression: "true" },
+                                { label: "OFF", expression: "false" },
+                            ],
+                        },
+                        presetString: {
+                            refClazzName: "java.lang.String",
+                            values: [
+                                { label: "string1", expression: "'someOtherString'" },
+                                { label: "string2", expression: "'yetAnotherString'" },
+                            ],
+                        },
+                    },
+                },
             };
         }
         case "PROCESS_TOOLBARS_CONFIGURATION_LOADED": {

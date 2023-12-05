@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { FixedValuesSetting } from "../fields/FixedValuesSetting";
 import { FixedValuesPresets, VariableTypes } from "../../../../../../../types";
 import { Error } from "../../../../editors/Validators";
+import { FixedValuesGroup } from "../fields/FixedValuesGroup";
 
 interface Props {
     item: AnyValueWithSuggestionsParameterVariant;
@@ -29,7 +30,7 @@ export const AnyValueWithSuggestionVariant = ({
 }: Props) => {
     const { t } = useTranslation();
 
-    const presetListItemOptions = fixedValuesPresets?.[item.fixedValuesListPresetId] ?? [];
+    const presetListItemOptions = fixedValuesPresets?.[item.valueEditor.fixedValuesPresetId]?.values ?? [];
 
     const fixedValuesList = item.valueEditor.fixedValuesList ?? [];
 
@@ -37,7 +38,7 @@ export const AnyValueWithSuggestionVariant = ({
 
     return (
         <>
-            {/*<FixedValuesGroup path={path} onChange={onChange} fixedValuesType={fixedValuesType} readOnly={readOnly} />*/}
+            <FixedValuesGroup path={path} onChange={onChange} fixedValuesType={fixedValuesType} readOnly={readOnly} />
             <FixedValuesSetting
                 path={path}
                 onChange={onChange}
@@ -45,7 +46,7 @@ export const AnyValueWithSuggestionVariant = ({
                 presetSelection={item.presetSelection}
                 fixedValuesList={fixedValuesList}
                 fixedValuesPresets={fixedValuesPresets}
-                fixedValuesListPresetId={item.fixedValuesListPresetId}
+                fixedValuesListPresetId={item.valueEditor.fixedValuesPresetId}
                 readOnly={readOnly}
                 variableTypes={variableTypes}
                 fieldsErrors={fieldsErrors}

@@ -51,6 +51,7 @@ export enum EditorType {
     JSON_PARAMETER_EDITOR = "JsonParameterEditor",
     SQL_PARAMETER_EDITOR = "SqlParameterEditor",
     SPEL_TEMPLATE_PARAMETER_EDITOR = "SpelTemplateParameterEditor",
+    FIXED_VALUES_PRESET_PARAMETER_EDITOR = "FixedValuesPresetParameterEditor",
 }
 
 const configureValidators = (paramConfig: $TodoType): Array<Validator> => {
@@ -93,4 +94,5 @@ export const editors = {
     [EditorType.TIME]: TimeEditor,
     [EditorType.SQL_PARAMETER_EDITOR]: SqlEditor,
     [EditorType.SPEL_TEMPLATE_PARAMETER_EDITOR]: SpelTemplateEditor,
+    [EditorType.FIXED_VALUES_PRESET_PARAMETER_EDITOR]: FixedValuesEditor,
 };
