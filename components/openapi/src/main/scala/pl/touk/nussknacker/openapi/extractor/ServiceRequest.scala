@@ -2,14 +2,14 @@ package pl.touk.nussknacker.openapi.extractor
 
 import io.circe
 import io.circe.Json
-import pl.touk.nussknacker.engine.json.swagger.{SwaggerObject, SwaggerString}
+import pl.touk.nussknacker.engine.json.swagger.SwaggerObject
 import pl.touk.nussknacker.engine.util.json.BestEffortJsonEncoder
 import pl.touk.nussknacker.openapi._
 import pl.touk.nussknacker.openapi.extractor.ServiceRequest.SwaggerRequestType
 import sttp.client3._
 import sttp.client3.circe._
 import sttp.model.Uri.PathSegment
-import sttp.model.{Header, MediaType, Method, Uri}
+import sttp.model.{Header, Method, Uri}
 
 import java.net.URL
 
@@ -54,7 +54,7 @@ private class ServiceRequest(rootUrl: URL, swaggerService: SwaggerService, input
   def apply: SwaggerRequestType = {
     val encoder = BestEffortJsonEncoder(failOnUnknown = false, getClass.getClassLoader)
 
-    // FIXME: lepsza obsluga (rozpoznawanie multi headers, itp...)
+    // TODO: better handling (recognizing multi headers etc.)
     val headers: List[Header] = swaggerService.parameters.collect { case paramDef @ HeaderParameter(value, _) =>
       safeParam(value).map(value => new Header(paramDef.name, value.toString)).toList
     }.flatten
