@@ -158,14 +158,17 @@ trait CanBeSubclassDeterminer {
     // e.g. (String | Int).canBeSubclassOf(String) which can fail in runtime for Int, but on the other hand we can't block user's intended action.
     // He/she could be sure that in this type, only String will appear. He/she also can't easily downcast (String | Int) to String so leaving here
     // "double exists" looks like a good tradeoff
-    condNel(
-      givenTypes.exists(given => superclassCandidates.exists(singleCanBeSubclassOf(given, _).isValid)),
-      (),
-      s"""None of the following types:
+
+    if (givenTypes.isEmpty && superclassCandidates.isEmpty) ().validNel
+    else
+      condNel(
+        givenTypes.exists(given => superclassCandidates.exists(singleCanBeSubclassOf(given, _).isValid)),
+        (),
+        s"""None of the following types:
          |${givenTypes.map(" - " + _.display).mkString(",\n")}
          |can be a subclass of any of:
          |${superclassCandidates.map(" - " + _.display).mkString(",\n")}""".stripMargin
-    )
+      )
   }
 
   // TODO: Conversions should be checked during typing, not during generic usage of TypingResult.canBeSubclassOf(...)

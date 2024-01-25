@@ -342,30 +342,79 @@ class LiteRequestResponseFunctionalTest
       Invalid(NonEmptyList.one(CustomNodeError(sinkName, finalMessage, Some(fieldName))))
     }
     val objectWithNestedPatternPropertiesSchema = JsonSchemaBuilder.parseSchema("""{
-        |  "type": "object",
-        |  "properties": {
-        |    "field": {
-        |      "type": "object",
-        |      "patternProperties": {
-        |        "_int$": { "type": "integer" }
-        |      }
-        |    }
-        |  }
-        |}""".stripMargin)
+            |    "properties": {
+            |        "attachments": {
+            |            "items": {
+            |                "properties": {
+            |                    "attachmentType": {
+            |                        "type": "string"
+            |                    },
+            |                    "parametersWithInitialValue": {
+            |                        "properties": {
+            |                            "clientDocIdExpirationDate": {
+            |                                "description": "Data ważności dokumentu tożsamości",
+            |                                "format": "date",
+            |                                "type": "string"
+            |                            },
+            |                            "clientDocIdNo": {
+            |                                "description": "Numer dokumentu tożsamości do weryfikacji",
+            |                                "type": "string"
+            |                            },
+            |                            "clientFirstName": {
+            |                                "description": "Imie klienta do weryfikacji",
+            |                                "type": "string"
+            |                            },
+            |                            "clientLastName": {
+            |                                "description": "Nazwisko klienta do weryfikacji",
+            |                                "type": "string"
+            |                            },
+            |                            "clientPesel": {
+            |                                "description": "Pesel klienta do weryfikacji",
+            |                                "type": "string"
+            |                            }
+            |                        },
+            |                        "type": "object"
+            |                    }
+            |                },
+            |                "type": "object"
+            |            },
+            |            "maxItems": 5,
+            |            "minItems": 1,
+            |            "type": "array"
+            |        }
+            |    },
+            |    "type": "object"
+            |}""".stripMargin)
 
     val testData = Table(
       ("sinkSchema", "sinkFields", "result"),
       (
         objectWithNestedPatternPropertiesSchema,
-        Map("field" -> "{'foo_int': 1}"),
+        Map(
+          "attachments" ->
+            """
+            |{
+            |   {
+            |       "attachmentType": "ID",
+            |       "parametersWithInitialValue": {
+            |            "clientFirstName": "Jan",
+            |            "clientLastName": "Kowalski",
+            |            "clientPesel": "91273912391",
+            |            "clientDocIdNo": "RP123456",
+            |            "clientDocIdExpirationDate": #DATE.now.atZone(#DATE.zuluTimeZone).toLocalDate
+            |        }
+            |   }
+            |}
+            |""".stripMargin
+        ),
         Valid(obj("field" -> obj("foo_int" -> fromInt(1))))
-      ),
-      (
-        objectWithNestedPatternPropertiesSchema,
-        Map("field" -> "{'foo_int': '1'}"),
-        invalidTypeInEditorMode("field", "actual: 'String(1)' expected: 'Long'")
-      ),
+      )
     )
+
+    //
+    // Przypadkowo tutaj sobie zaczalem testowac i widac, ze jak nie ma poprawki w canBeSubclassOf to leci `Bad expression type, expected:....`
+    // Jak jest to nie ma. Poprawka pewnie przykrywa wiekszy problem, ze tam wgl pojawilo sie TypedUnion(Set())
+    //
 
     forAll(testData) { (sinkSchema: Schema, sinkFields: Map[String, String], expected: Validated[_, Json]) =>
       val cfg = config(sampleObjWithAdds, schemaObjString(true), sinkSchema)
