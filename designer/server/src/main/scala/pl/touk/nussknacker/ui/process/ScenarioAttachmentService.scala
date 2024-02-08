@@ -13,9 +13,8 @@ import java.io.InputStream
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Using
 
-class ScenarioAttachmentService(config: AttachmentsConfig, scenarioActivityRepository: ProcessActivityRepository)(
-    implicit ec: ExecutionContext
-) extends LazyLogging {
+class ScenarioAttachmentService(config: AttachmentsConfig, scenarioActivityRepository: ProcessActivityRepository)
+                               (implicit ec: ExecutionContext) extends LazyLogging {
 
   def saveAttachment(
       scenarioId: ProcessId,
@@ -39,9 +38,9 @@ class ScenarioAttachmentService(config: AttachmentsConfig, scenarioActivityRepos
       })
   }
 
-  def readAttachment(attachmentId: Long, scenarioId: ProcessId): Future[Option[AttachmentDataWithName]] = {
+  def readAttachment(attachmentId: Long): Future[Option[AttachmentDataWithName]] = {
     scenarioActivityRepository
-      .findAttachment(attachmentId, scenarioId)
+      .findAttachment(attachmentId)
       .map(_.map(attachment => (attachment.fileName, attachment.data)))
   }
 
