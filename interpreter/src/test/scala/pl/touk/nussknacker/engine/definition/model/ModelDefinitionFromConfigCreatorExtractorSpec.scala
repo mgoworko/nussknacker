@@ -57,12 +57,12 @@ class ModelDefinitionFromConfigCreatorExtractorSpec extends AnyFunSuite with Mat
 
   test("extract type info from classes from additional variables") {
     val classDefinition = modelDefinitionWithTypes(None).classDefinitions.get(classOf[OnlyUsedInAdditionalVariable])
-    classDefinition.map(_.methods.keys) shouldBe Some(Set("someField", "toString"))
+    classDefinition.map(_.methods.keySet) shouldBe Some(Set("someField", "toString"))
   }
 
   test("extract type info from additional classes") {
     val classDefinition = modelDefinitionWithTypes(None).classDefinitions.get(classOf[AdditionalClass])
-    classDefinition.map(_.methods.keys) shouldBe Some(Set("someField", "toString"))
+    classDefinition.map(_.methods.keySet) shouldBe Some(Set("someField", "toString"))
   }
 
   test("extract definition from WithExplicitMethodToInvoke") {
@@ -199,7 +199,7 @@ class ModelDefinitionFromConfigCreatorExtractorSpec extends AnyFunSuite with Mat
   }
 
   private def modelDefinitionWithTypes(category: Option[String]) = {
-    val modelConfig = new DefaultModelConfigLoader()
+    val modelConfig = new DefaultModelConfigLoader(_ => true)
       .resolveConfig(InputConfigDuringExecution(ConfigFactory.empty()), getClass.getClassLoader)
     val modelDefinition = ModelDefinitionFromConfigCreatorExtractor.extractModelDefinition(
       TestCreator,
@@ -371,7 +371,7 @@ class ModelDefinitionFromConfigCreatorExtractorSpec extends AnyFunSuite with Mat
   case class EmptyExplicitMethodToInvoke(parameters: List[Parameter], returnType: TypingResult)
       extends EagerServiceWithStaticParametersAndReturnType {
 
-    override def invoke(params: Map[String, Any])(
+    override def invoke(params: Params)(
         implicit ec: ExecutionContext,
         collector: InvocationCollectors.ServiceInvocationCollector,
         contextId: ContextId,

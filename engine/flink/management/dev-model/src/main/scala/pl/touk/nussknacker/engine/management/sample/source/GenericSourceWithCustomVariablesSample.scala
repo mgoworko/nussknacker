@@ -3,8 +3,9 @@ package pl.touk.nussknacker.engine.management.sample.source
 import cats.data.ValidatedNel
 import io.circe.Json
 import org.apache.flink.api.common.typeinfo.TypeInformation
-import pl.touk.nussknacker.engine.api.{CirceUtil, Context, NodeId}
-import pl.touk.nussknacker.engine.api.context.transformation.{NodeDependencyValue, SingleInputGenericNodeTransformation}
+import pl.touk.nussknacker.engine.api.component.UnboundedStreamComponent
+import pl.touk.nussknacker.engine.api.{CirceUtil, Context, NodeId, Params}
+import pl.touk.nussknacker.engine.api.context.transformation.{NodeDependencyValue, SingleInputDynamicComponent}
 import pl.touk.nussknacker.engine.api.context.{ProcessCompilationError, ValidationContext}
 import pl.touk.nussknacker.engine.api.definition.{NodeDependency, Parameter}
 import pl.touk.nussknacker.engine.api.process._
@@ -15,7 +16,10 @@ import pl.touk.nussknacker.engine.flink.api.process._
 import pl.touk.nussknacker.engine.flink.api.timestampwatermark.TimestampWatermarkHandler
 import pl.touk.nussknacker.engine.flink.util.source.CollectionSource
 
-object GenericSourceWithCustomVariablesSample extends SourceFactory with SingleInputGenericNodeTransformation[Source] {
+object GenericSourceWithCustomVariablesSample
+    extends SourceFactory
+    with SingleInputDynamicComponent[Source]
+    with UnboundedStreamComponent {
 
   private class CustomFlinkContextInitializer extends BasicContextInitializer[String](Typed[String]) {
 
@@ -63,19 +67,19 @@ object GenericSourceWithCustomVariablesSample extends SourceFactory with SingleI
 
   override def contextTransformation(context: ValidationContext, dependencies: List[NodeDependencyValue])(
       implicit nodeId: NodeId
-  ): GenericSourceWithCustomVariablesSample.NodeTransformationDefinition = {
+  ): GenericSourceWithCustomVariablesSample.ContextTransformationDefinition = {
     case TransformationStep(Nil, _) => NextParameters(Parameter[java.util.List[String]](`elementsParamName`) :: Nil)
     case TransformationStep((`elementsParamName`, _) :: Nil, None) =>
       FinalResults.forValidation(context)(customContextInitializer.validationContext)
   }
 
   override def implementation(
-      params: Map[String, Any],
+      params: Params,
       dependencies: List[NodeDependencyValue],
       finalState: Option[State]
   ): Source = {
     import scala.jdk.CollectionConverters._
-    val elements = params(`elementsParamName`).asInstanceOf[java.util.List[String]].asScala.toList
+    val elements = params.extractUnsafe[java.util.List[String]](`elementsParamName`).asScala.toList
 
     new CollectionSource[String](elements, None, Typed[String])(TypeInformation.of(classOf[String]))
       with TestDataGenerator

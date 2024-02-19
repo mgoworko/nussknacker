@@ -187,7 +187,7 @@ lazy val commonSettings =
         "-deprecation",
         "-encoding",
         "utf8",
-//        "-Xfatal-warnings",
+        "-Xfatal-warnings",
         "-feature",
         "-language:postfixOps",
         "-language:existentials",
@@ -284,20 +284,19 @@ lazy val commonSettings =
 // Note: when updating check versions in 'flink*V' below, because some libraries must be fixed at versions provided
 // by Flink, or jobs may fail in runtime when Flink is run with 'classloader.resolve-order: parent-first'.
 // You can find versions provided by Flink in it's lib/flink-dist-*.jar/META-INF/DEPENDENCIES file.
-val flinkV               = "1.18.0"
-val flinkConnectorKafkaV = "3.1.0-1.18"
-val flinkCommonsLang3V   = "3.12.0"
-val flinkCommonsTextV    = "1.10.0"
-val flinkCommonsIOV      = "2.11.0"
-val avroV                = "1.11.3"
+val flinkV             = "1.17.2"
+val flinkCommonsLang3V = "3.12.0"
+val flinkCommonsTextV  = "1.10.0"
+val flinkCommonsIOV    = "2.11.0"
+val avroV              = "1.11.3"
 //we should use max(version used by confluent, version acceptable by flink), https://docs.confluent.io/platform/current/installation/versions-interoperability.html - confluent version reference
-val kafkaV               = "3.6.1"
+val kafkaV             = "3.6.1"
 //TODO: Spring 5.3 has some problem with handling our PrimitiveOrWrappersPropertyAccessor
-val springV              = "5.2.23.RELEASE"
-val scalaTestV           = "3.2.17"
-val scalaCheckV          = "1.17.0"
-val scalaCheckVshort     = scalaCheckV.take(4).replace(".", "-")
-val scalaTestPlusV       =
+val springV            = "5.2.23.RELEASE"
+val scalaTestV         = "3.2.17"
+val scalaCheckV        = "1.17.0"
+val scalaCheckVshort   = scalaCheckV.take(4).replace(".", "-")
+val scalaTestPlusV     =
   "3.2.17.0" // has to match scalatest and scalacheck versions, see https://github.com/scalatest/scalatestplus-scalacheck/releases
 // note: Logback 1.3 requires Slf4j 2.x, but Flink has Slf4j 1.7 on its classpath
 val logbackV                = "1.2.12"
@@ -601,7 +600,8 @@ lazy val flinkDeploymentManager = (project in flink("management"))
         "com.softwaremill.retry" %% "retry"                          % "0.3.6",
         "com.dimafeng"           %% "testcontainers-scala-scalatest" % testContainersScalaV % "it,test",
         "com.dimafeng"           %% "testcontainers-scala-kafka"     % testContainersScalaV % "it,test",
-        "com.github.tomakehurst"  % "wiremock-jre8"                  % wireMockV            % Test
+        "com.github.tomakehurst"  % "wiremock-jre8"                  % wireMockV            % Test,
+        "org.scalatestplus"      %% "mockito-4-11"                   % scalaTestPlusV       % Test,
       ) ++ flinkLibScalaDeps(scalaVersion.value, Some(flinkScope))
     },
     // override scala-collection-compat from com.softwaremill.retry:retry
@@ -904,10 +904,10 @@ lazy val flinkSchemedKafkaComponentsUtils = (project in flink("schemed-kafka-com
     name := "nussknacker-flink-schemed-kafka-components-utils",
     libraryDependencies ++= {
       Seq(
-        "org.apache.flink" % "flink-streaming-java"   % flinkV               % "provided",
+        "org.apache.flink" % "flink-streaming-java"   % flinkV     % "provided",
         "org.apache.flink" % "flink-avro"             % flinkV,
-        "org.apache.flink" % s"flink-connector-kafka" % flinkConnectorKafkaV % "test",
-        "org.scalatest"   %% "scalatest"              % scalaTestV           % "test"
+        "org.apache.flink" % s"flink-connector-kafka" % flinkV     % "test",
+        "org.scalatest"   %% "scalatest"              % scalaTestV % "test"
       )
     }
   )
@@ -928,7 +928,7 @@ lazy val flinkKafkaComponentsUtils = (project in flink("kafka-components-utils")
     name := "nussknacker-flink-kafka-components-utils",
     libraryDependencies ++= {
       Seq(
-        "org.apache.flink" % "flink-connector-kafka" % flinkConnectorKafkaV,
+        "org.apache.flink" % "flink-connector-kafka" % flinkV,
         "org.apache.flink" % "flink-streaming-java"  % flinkV     % "provided",
         "org.scalatest"   %% "scalatest"             % scalaTestV % "test"
       )
@@ -1853,17 +1853,18 @@ lazy val designer = (project in file("designer/server"))
     restmodel,
     listenerApi,
     testUtils                         % "test",
-    // TODO: this is unfortunately needed to run without too much hassle in Intellij...
-    // provided dependency of kafka is workaround for Idea, which is not able to handle test scope on module dependency
-    // otherwise it is (wrongly) added to classpath when running Designer from Idea
+    // All DeploymentManager dependencies are added because they are needed to run NussknackerApp* with
+    // dev-application.conf. Currently, we doesn't have a separate classpath for DMs like we have for components.
+    // schemedKafkaComponentsUtils is added because loading the provided liteEmbeddedDeploymentManager causes
+    // that are also load added their test dependencies on the classpath by the Idea. It causes that
+    // UniversalKafkaSourceFactory is loaded from app classloader and GenericRecord which is defined in typesToExtract
+    // is missing from this classloader
     flinkDeploymentManager            % "provided",
     liteEmbeddedDeploymentManager     % "provided",
     liteK8sDeploymentManager          % "provided",
-    kafkaUtils                        % "provided",
-    schemedKafkaComponentsUtils       % "provided",
-    requestResponseRuntime            % "provided",
     developmentTestsDeploymentManager % "provided",
     devPeriodicDM                     % "provided",
+    schemedKafkaComponentsUtils       % "provided",
   )
 
 /*
@@ -1969,7 +1970,8 @@ lazy val modules = List[ProjectReference](
   jsonUtils,
   liteComponentsTestkit,
   flinkComponentsTestkit,
-  mathUtils
+  mathUtils,
+  developmentTestsDeploymentManager
 )
 
 lazy val modulesWithBom: List[ProjectReference] = bom :: modules

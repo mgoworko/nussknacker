@@ -5,9 +5,10 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import pl.touk.nussknacker.engine.api._
 import pl.touk.nussknacker.engine.api.component.ComponentDefinition
+import pl.touk.nussknacker.engine.api.component.UnboundedStreamComponent
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.CannotCreateObjectError
 import pl.touk.nussknacker.engine.api.context.ValidationContext
-import pl.touk.nussknacker.engine.api.context.transformation.{NodeDependencyValue, SingleInputGenericNodeTransformation}
+import pl.touk.nussknacker.engine.api.context.transformation.{NodeDependencyValue, SingleInputDynamicComponent}
 import pl.touk.nussknacker.engine.api.definition.{
   AdditionalVariableProvidedInRuntime,
   AdditionalVariableWithFixedValue,
@@ -70,7 +71,7 @@ class AdditionalVariableSpec extends AnyFunSuite with Matchers {
       .parameters
   }
 
-  class CorrectService extends SourceFactory {
+  class CorrectService extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke
     def invoke(
@@ -86,7 +87,7 @@ class AdditionalVariableSpec extends AnyFunSuite with Matchers {
 
   }
 
-  class IncorrectService1 extends SourceFactory {
+  class IncorrectService1 extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke
     def invoke(
@@ -98,13 +99,13 @@ class AdditionalVariableSpec extends AnyFunSuite with Matchers {
 
   }
 
-  class IncorrectService2 extends SourceFactory with SingleInputGenericNodeTransformation[Source] {
+  class IncorrectService2 extends SourceFactory with SingleInputDynamicComponent[Source] with UnboundedStreamComponent {
 
     override type State = Nothing
 
     override def contextTransformation(context: ValidationContext, dependencies: List[NodeDependencyValue])(
         implicit nodeId: NodeId
-    ): NodeTransformationDefinition = { case TransformationStep(Nil, _) =>
+    ): ContextTransformationDefinition = { case TransformationStep(Nil, _) =>
       NextParameters(
         List(
           Parameter[String]("toFail")
@@ -117,7 +118,7 @@ class AdditionalVariableSpec extends AnyFunSuite with Matchers {
     }
 
     override def implementation(
-        params: Map[String, Any],
+        params: Params,
         dependencies: List[NodeDependencyValue],
         finalState: Option[Nothing]
     ): Source = null

@@ -38,8 +38,9 @@ class PeriodicProcessService(
     deploymentRetryConfig: DeploymentRetryConfig,
     executionConfig: PeriodicExecutionConfig,
     processConfigEnricher: ProcessConfigEnricher,
-    clock: Clock
-)(implicit ec: ExecutionContext, deploymentService: ProcessingTypeDeploymentService)
+    clock: Clock,
+    deploymentService: ProcessingTypeDeploymentService
+)(implicit ec: ExecutionContext)
     extends LazyLogging {
 
   import cats.syntax.all._
@@ -362,7 +363,7 @@ class PeriodicProcessService(
     // TODO: set status before deployment?
     val id = deployment.id
     val deploymentData = DeploymentData(
-      DeploymentId(id.value.toString),
+      DeploymentId(id.toString),
       DeploymentData.systemUser,
       additionalDeploymentDataProvider.prepareAdditionalData(deployment)
     )

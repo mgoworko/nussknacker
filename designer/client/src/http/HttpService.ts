@@ -8,15 +8,15 @@ import api from "../api";
 import { UserData } from "../common/models/User";
 import {
     ProcessActionType,
-    ProcessStateType,
-    Scenario,
-    ProcessVersionId,
-    StatusDefinitionType,
     ProcessName,
+    ProcessStateType,
+    ProcessVersionId,
+    Scenario,
+    StatusDefinitionType,
 } from "../components/Process/types";
 import { ToolbarsConfig } from "../components/toolbarSettings/types";
 import { AuthenticationSettings } from "../reducers/settings";
-import { Expression, ScenarioGraph, ProcessAdditionalFields, ProcessDefinitionData, VariableTypes } from "../types";
+import { Expression, NodeType, ProcessAdditionalFields, ProcessDefinitionData, ScenarioGraph, VariableTypes } from "../types";
 import { Instant, WithId } from "../types/common";
 import { BackendNotification } from "../containers/Notifications";
 import { ProcessCounts } from "../reducers/graph";
@@ -130,6 +130,23 @@ export interface ExpressionSuggestionRequest {
     variableTypes: VariableTypes;
 }
 
+export enum ProcessingMode {
+    "streaming" = "Unbounded-Stream",
+    "requestResponse" = "Request-Response",
+    "batch" = "Bounded-Stream",
+}
+
+export interface ScenarioParametersCombination {
+    processingMode: ProcessingMode;
+    category: string;
+    engineSetupName: string;
+}
+
+export interface ScenarioParametersCombinations {
+    combinations: ScenarioParametersCombination[];
+    engineSetupErrors: Record<string, string[]>;
+}
+
 class HttpService {
     //TODO: Move show information about error to another place. HttpService should avoid only action (get / post / etc..) - handling errors should be in another place.
     #notificationActions: NotificationActions = null;
@@ -205,6 +222,10 @@ class HttpService {
             this.#addError(i18next.t("notification.error.cannotFindChosenVersions", "Cannot find chosen versions"), error, true),
         );
         return promise;
+    }
+
+    fetchDictLabelSuggestions(processingType, dictId, labelPattern) {
+        return api.get(`/processDefinitionData/${processingType}/dict/${dictId}/entry?label=${labelPattern}`);
     }
 
     fetchComponents(): Promise<AxiosResponse<ComponentType[]>> {
@@ -408,12 +429,14 @@ class HttpService {
         });
     }
 
-    validateNode(processName: string, node: ValidationRequest): Promise<AxiosResponse<ValidationData>> {
-        const promise = api.post(`/nodes/${encodeURIComponent(processName)}/validation`, node);
-        promise.catch((error) =>
-            this.#addError(i18next.t("notification.error.failedToValidateNode", "Failed to get node validation"), error, true),
-        );
-        return promise;
+    validateNode(processName: string, node: ValidationRequest): Promise<ValidationData | void> {
+        return api
+            .post(`/nodes/${encodeURIComponent(processName)}/validation`, node)
+            .then((res) => res.data)
+            .catch((error) => {
+                this.#addError(i18next.t("notification.error.failedToValidateNode", "Failed to get node validation"), error, true);
+                return;
+            });
     }
 
     validateGenericActionParameters(
@@ -439,36 +462,54 @@ class HttpService {
         return promise;
     }
 
-    validateProperties(processName: string, propertiesRequest: PropertiesValidationRequest): Promise<AxiosResponse<ValidationData>> {
-        const promise = api.post(`/properties/${encodeURIComponent(processName)}/validation`, propertiesRequest);
-        promise.catch((error) =>
-            this.#addError(i18next.t("notification.error.failedToValidateProperties", "Failed to get properties validation"), error, true),
-        );
-        return promise;
+    validateProperties(processName: string, propertiesRequest: PropertiesValidationRequest): Promise<ValidationData | void> {
+        return api
+            .post(`/properties/${encodeURIComponent(processName)}/validation`, propertiesRequest)
+            .then((res) => res.data)
+            .catch((error) => {
+                this.#addError(
+                    i18next.t("notification.error.failedToValidateProperties", "Failed to get properties validation"),
+                    error,
+                    true,
+                );
+                return;
+            });
     }
 
-    getNodeAdditionalInfo(processName, node): Promise<AxiosResponse<AdditionalInfo>> {
-        const promise = api.post<AdditionalInfo>(`/nodes/${encodeURIComponent(processName)}/additionalInfo`, node);
-        promise.catch((error) =>
-            this.#addError(
-                i18next.t("notification.error.failedToFetchNodeAdditionalInfo", "Failed to get node additional info"),
-                error,
-                true,
-            ),
-        );
-        return promise;
+    getNodeAdditionalInfo(processName: string, node: NodeType, controller?: AbortController): Promise<AdditionalInfo | null> {
+        return api
+            .post<AdditionalInfo>(`/nodes/${encodeURIComponent(processName)}/additionalInfo`, node, {
+                signal: controller?.signal,
+            })
+            .then((res) => res.data)
+            .catch((error) => {
+                this.#addError(
+                    i18next.t("notification.error.failedToFetchNodeAdditionalInfo", "Failed to get node additional info"),
+                    error,
+                    true,
+                );
+                return null;
+            });
     }
 
-    getPropertiesAdditionalInfo(processName, processProperties): Promise<AxiosResponse<AdditionalInfo>> {
-        const promise = api.post<AdditionalInfo>(`/properties/${encodeURIComponent(processName)}/additionalInfo`, processProperties);
-        promise.catch((error) =>
-            this.#addError(
-                i18next.t("notification.error.failedToFetchPropertiesAdditionalInfo", "Failed to get properties additional info"),
-                error,
-                true,
-            ),
-        );
-        return promise;
+    getPropertiesAdditionalInfo(
+        processName: string,
+        processProperties: NodeType,
+        controller?: AbortController,
+    ): Promise<AdditionalInfo | null> {
+        return api
+            .post<AdditionalInfo>(`/properties/${encodeURIComponent(processName)}/additionalInfo`, processProperties, {
+                signal: controller?.signal,
+            })
+            .then((res) => res.data)
+            .catch((error) => {
+                this.#addError(
+                    i18next.t("notification.error.failedToFetchPropertiesAdditionalInfo", "Failed to get properties additional info"),
+                    error,
+                    true,
+                );
+                return null;
+            });
     }
 
     //This method will return *FAILED* promise if validation fails with e.g. 400 (fatal validation error)
@@ -549,8 +590,8 @@ class HttpService {
 
     //This method will return *FAILED* promise if save/validation fails with e.g. 400 (fatal validation error)
 
-    createProcess(processName: string, processCategory: string, isFragment = false) {
-        const promise = api.post(`/processes/${encodeURIComponent(processName)}/${processCategory}?isFragment=${isFragment}`);
+    createProcess(data: { name: string; category: string; isFragment: boolean; processingMode: string; engineSetupName: string }) {
+        const promise = api.post(`/processes`, data);
         promise.catch((error) => {
             if (error?.response?.status != 400)
                 this.#addError(i18next.t("notification.error.failedToCreate", "Failed to create scenario:"), error, true);
@@ -651,6 +692,10 @@ class HttpService {
         return api.get<AuthenticationSettings>(`/authentication/${authenticationProvider.toLowerCase()}/settings`);
     }
 
+    fetchScenarioParametersCombinations() {
+        return api.get<ScenarioParametersCombinations>(`/scenarioParametersCombinations`);
+    }
+
     #addInfo(message: string) {
         if (this.#notificationActions) {
             this.#notificationActions.success(message);
@@ -677,10 +722,6 @@ class HttpService {
                 : typeof errorResponseData === "string"
                 ? errorResponseData
                 : JSON.stringify(errorResponseData);
-
-        console.error(
-            `Error with --> \n StatusText: ${error.response.statusText} \n Status: ${error.response.status}  \n Message: ${error.message} \n Server: ${error.response.headers.server}`,
-        );
 
         this.#addErrorMessage(message, errorMessage, showErrorText);
         return Promise.resolve(error);

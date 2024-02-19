@@ -6,7 +6,12 @@ import cats.data.{State, StateT, ValidatedNel}
 import com.typesafe.config.ConfigFactory
 import pl.touk.nussknacker.engine.Interpreter.InterpreterShape
 import pl.touk.nussknacker.engine.api._
-import pl.touk.nussknacker.engine.api.component.{ComponentDefinition, ComponentType, NodeComponentInfo}
+import pl.touk.nussknacker.engine.api.component.{
+  ComponentDefinition,
+  ComponentType,
+  NodeComponentInfo,
+  UnboundedStreamComponent
+}
 import pl.touk.nussknacker.engine.api.definition.Parameter
 import pl.touk.nussknacker.engine.api.exception.NuExceptionInfo
 import pl.touk.nussknacker.engine.api.process._
@@ -115,13 +120,12 @@ object sample {
     override def createStateTransformation[F[_]: Monad](
         context: CustomComponentContext[F]
     ): Context => F[Context] = {
-      val interpreter = context.interpreter.syncInterpretationFunction(value)
       val convert = context.capabilityTransformer
         .transform[StateType]
         .getOrElse(throw new IllegalArgumentException("No capability!"))
       (ctx: Context) =>
         convert(State((current: Map[String, Double]) => {
-          val newValue = current.getOrElse(name, 0d) + interpreter(ctx)
+          val newValue = current.getOrElse(name, 0d) + value.evaluate(ctx)
           (current + (name -> newValue), ctx.withVariable(outputVar, newValue))
         }))
     }
@@ -174,7 +178,7 @@ object sample {
 
   }
 
-  object SimpleSourceFactory extends SourceFactory {
+  object SimpleSourceFactory extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke
     def create(): Source = new LiteSource[SampleInput] with SourceTestSupport[SampleInput] {
@@ -193,7 +197,7 @@ object sample {
 
   }
 
-  object FailOnNumber1SourceFactory extends SourceFactory {
+  object FailOnNumber1SourceFactory extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke
     def create()(implicit nodeId: NodeId): Source = new LiteSource[SampleInput] {
@@ -219,7 +223,7 @@ object sample {
 
   }
 
-  object SimpleSourceWithParameterTestingFactory extends SourceFactory {
+  object SimpleSourceWithParameterTestingFactory extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke(returnType = classOf[SampleInputWithListAndMap])
     def create(): Source = new LiteSource[SampleInputWithListAndMap]
@@ -252,8 +256,11 @@ object sample {
   object SimpleSinkFactory extends SinkFactory {
 
     @MethodToInvoke
-    def create(@ParamName("value") value: LazyParameter[AnyRef]): LazyParamSink[AnyRef] =
-      (_: LazyParameterInterpreter) => value
+    def create(@ParamName("value") value: LazyParameter[AnyRef]): LazyParamSink[AnyRef] = {
+      new LazyParamSink[AnyRef] {
+        override def prepareResponse: LazyParameter[AnyRef] = value
+      }
+    }
 
   }
 
