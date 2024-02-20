@@ -3,12 +3,11 @@ import React, { PropsWithChildren } from "react";
 import { ParameterExpressionField } from "./ParameterExpressionField";
 import { IdField } from "./IdField";
 import { DescriptionField } from "./DescriptionField";
-import { NodeTableBody } from "./NodeDetailsContent/NodeTable";
 import { NodeType, NodeValidationError, UIParameter } from "../../../types";
 import ProcessUtils from "../../../common/ProcessUtils";
 
 interface SourceSinkCommonProps {
-    fieldErrors?: NodeValidationError[];
+    errors: NodeValidationError[];
     findAvailableVariables?: ReturnType<typeof ProcessUtils.findAvailableVariables>;
     isEditMode?: boolean;
     node: NodeType;
@@ -21,7 +20,7 @@ interface SourceSinkCommonProps {
 
 export const SourceSinkCommon = ({
     children,
-    fieldErrors,
+    errors,
     findAvailableVariables,
     isEditMode,
     node,
@@ -32,14 +31,14 @@ export const SourceSinkCommon = ({
     showValidation,
 }: PropsWithChildren<SourceSinkCommonProps>): JSX.Element => {
     return (
-        <NodeTableBody>
+        <>
             <IdField
                 isEditMode={isEditMode}
                 showValidation={showValidation}
                 node={node}
                 renderFieldLabel={renderFieldLabel}
                 setProperty={setProperty}
-                errors={fieldErrors}
+                errors={errors}
             />
             {node.ref.parameters?.map((param, index) => (
                 <div className="node-block" key={node.id + param.name + index}>
@@ -50,7 +49,7 @@ export const SourceSinkCommon = ({
                         node={node}
                         findAvailableVariables={findAvailableVariables}
                         parameterDefinitions={parameterDefinitions}
-                        fieldErrors={fieldErrors}
+                        errors={errors}
                         renderFieldLabel={renderFieldLabel}
                         setProperty={setProperty}
                         parameter={param}
@@ -65,7 +64,8 @@ export const SourceSinkCommon = ({
                 node={node}
                 renderFieldLabel={renderFieldLabel}
                 setProperty={setProperty}
+                errors={errors}
             />
-        </NodeTableBody>
+        </>
     );
 };

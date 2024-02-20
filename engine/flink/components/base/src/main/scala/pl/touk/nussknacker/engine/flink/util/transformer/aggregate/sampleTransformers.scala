@@ -10,22 +10,16 @@ import scala.concurrent.duration.Duration
 
 object sampleTransformers {
 
-  private def toAggregator(aggregatorType: String) = aggregatorType match {
-    case "Max"                       => aggregates.MaxAggregator
-    case "Min"                       => aggregates.MinAggregator
-    case "Set"                       => aggregates.SetAggregator
-    case "Sum"                       => aggregates.SumAggregator
-    case "ApproximateSetCardinality" => HyperLogLogPlusAggregator()
-    case _                           => throw new IllegalArgumentException(s"Unknown aggregate type: $aggregatorType")
-  }
-
   /**
    * This aggregator can be used for both predefined aggregators (see list below) and for some specialized aggregators like #AGG.map
    * when you switch editor to "raw mode". It also has `emitWhenEventLeft` flag.
    *
    * You should define `#AGG` global variable, because it is used in editors picked for `aggregateBy` parameter.
    */
-  object SlidingAggregateTransformerV2 extends CustomStreamTransformer with ExplicitUidInOperatorsSupport {
+  object SlidingAggregateTransformerV2
+      extends CustomStreamTransformer
+      with ExplicitUidInOperatorsSupport
+      with Serializable {
 
     @MethodToInvoke(returnType = classOf[AnyRef])
     def execute(
@@ -41,6 +35,8 @@ object sampleTransformers {
               new LabeledExpression(label = "Min", expression = "#AGG.min"),
               new LabeledExpression(label = "Max", expression = "#AGG.max"),
               new LabeledExpression(label = "Sum", expression = "#AGG.sum"),
+              new LabeledExpression(label = "Average", expression = "#AGG.average"),
+              new LabeledExpression(label = "CountWhen", expression = "#AGG.countWhen"),
               new LabeledExpression(label = "List", expression = "#AGG.list"),
               new LabeledExpression(label = "Set", expression = "#AGG.set"),
               new LabeledExpression(label = "ApproximateSetCardinality", expression = "#AGG.approxCardinality")
@@ -74,7 +70,8 @@ object sampleTransformers {
    */
   class TumblingAggregateTransformer(config: AggregateWindowsConfig)
       extends CustomStreamTransformer
-      with ExplicitUidInOperatorsSupport {
+      with ExplicitUidInOperatorsSupport
+      with Serializable {
 
     @MethodToInvoke(returnType = classOf[AnyRef])
     def execute(
@@ -90,6 +87,8 @@ object sampleTransformers {
               new LabeledExpression(label = "Min", expression = "#AGG.min"),
               new LabeledExpression(label = "Max", expression = "#AGG.max"),
               new LabeledExpression(label = "Sum", expression = "#AGG.sum"),
+              new LabeledExpression(label = "Average", expression = "#AGG.average"),
+              new LabeledExpression(label = "CountWhen", expression = "#AGG.countWhen"),
               new LabeledExpression(label = "List", expression = "#AGG.list"),
               new LabeledExpression(label = "Set", expression = "#AGG.set"),
               new LabeledExpression(label = "ApproximateSetCardinality", expression = "#AGG.approxCardinality")
@@ -125,7 +124,10 @@ object sampleTransformers {
    *
    * You should define `#AGG` global variable, because it is used in editors picked for `aggregateBy` parameter.
    */
-  object SessionWindowAggregateTransformer extends CustomStreamTransformer with ExplicitUidInOperatorsSupport {
+  object SessionWindowAggregateTransformer
+      extends CustomStreamTransformer
+      with ExplicitUidInOperatorsSupport
+      with Serializable {
 
     @MethodToInvoke(returnType = classOf[AnyRef])
     def execute(
@@ -141,6 +143,8 @@ object sampleTransformers {
               new LabeledExpression(label = "Min", expression = "#AGG.min"),
               new LabeledExpression(label = "Max", expression = "#AGG.max"),
               new LabeledExpression(label = "Sum", expression = "#AGG.sum"),
+              new LabeledExpression(label = "Average", expression = "#AGG.average"),
+              new LabeledExpression(label = "CountWhen", expression = "#AGG.countWhen"),
               new LabeledExpression(label = "List", expression = "#AGG.list"),
               new LabeledExpression(label = "Set", expression = "#AGG.set"),
               new LabeledExpression(label = "ApproximateSetCardinality", expression = "#AGG.approxCardinality")

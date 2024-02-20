@@ -1,86 +1,67 @@
 package pl.touk.nussknacker.engine.benchmarks.interpreter
 
+import cats.Monad
 import cats.data.Validated.{Invalid, Valid}
 import cats.data.ValidatedNel
-import com.typesafe.config.ConfigFactory
 import pl.touk.nussknacker.engine.Interpreter.InterpreterShape
 import pl.touk.nussknacker.engine.api._
+import pl.touk.nussknacker.engine.api.component.{ComponentDefinition, DesignerWideComponentId, UnboundedStreamComponent}
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError
 import pl.touk.nussknacker.engine.api.exception.NuExceptionInfo
 import pl.touk.nussknacker.engine.api.process._
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.compile.ProcessCompilerData
 import pl.touk.nussknacker.engine.compiledgraph.part.ProcessPart
-import pl.touk.nussknacker.engine.definition.ProcessDefinitionExtractor.ModelDefinitionWithTypes
-import pl.touk.nussknacker.engine.definition.ProcessDefinitionExtractor
+import pl.touk.nussknacker.engine.definition.component.ComponentDefinitionWithImplementation
+import pl.touk.nussknacker.engine.definition.model.{ModelDefinition, ModelDefinitionWithClasses}
 import pl.touk.nussknacker.engine.dict.SimpleDictRegistry
+import pl.touk.nussknacker.engine.modelconfig.ComponentsUiConfig
 import pl.touk.nussknacker.engine.resultcollector.ProductionServiceInvocationCollector
+import pl.touk.nussknacker.engine.testing.ModelDefinitionBuilder
 import pl.touk.nussknacker.engine.util.Implicits._
-import pl.touk.nussknacker.engine.util.namespaces.ObjectNamingProvider
 import pl.touk.nussknacker.engine.{CustomProcessValidatorLoader, InterpretationResult, api}
 
-import scala.concurrent.ExecutionContext
 import scala.language.higherKinds
 import scala.reflect.ClassTag
 
 class InterpreterSetup[T: ClassTag] {
 
-  def sourceInterpretation[F[_]: InterpreterShape](
+  def sourceInterpretation[F[_]: Monad: InterpreterShape](
       process: CanonicalProcess,
-      services: Map[String, Service],
-      listeners: Seq[ProcessListener]
-  ): (Context, ExecutionContext) => F[List[Either[InterpretationResult, NuExceptionInfo[_ <: Throwable]]]] = {
-    val compiledProcess = compile(services, process, listeners)
-    val interpreter     = compiledProcess.interpreter
-    val parts           = failOnErrors(compiledProcess.compile())
+      additionalComponents: List[ComponentDefinition]
+  ): (Context, ServiceExecutionContext) => F[List[Either[InterpretationResult, NuExceptionInfo[_ <: Throwable]]]] = {
+    val compilerData = prepareCompilerData(additionalComponents)
+    val interpreter  = compilerData.interpreter
+    val parts        = failOnErrors(compilerData.compile(process))
 
     def compileNode(part: ProcessPart) =
-      failOnErrors(compiledProcess.subPartCompiler.compile(part.node, part.validationContext)(process.metaData).result)
+      failOnErrors(compilerData.subPartCompiler.compile(part.node, part.validationContext)(process.metaData).result)
 
     val compiled = compileNode(parts.sources.head)
-    val shape    = implicitly[InterpreterShape[F]]
-    (initialCtx: Context, ec: ExecutionContext) =>
-      interpreter.interpret[F](compiled, process.metaData, initialCtx)(shape, ec)
+    (initialCtx: Context, ec: ServiceExecutionContext) =>
+      interpreter.interpret[F](compiled, process.metaData, initialCtx, ec)
   }
 
-  def compile(
-      servicesToUse: Map[String, Service],
-      process: CanonicalProcess,
-      listeners: Seq[ProcessListener]
+  def prepareCompilerData(
+      additionalComponents: List[ComponentDefinition],
   ): ProcessCompilerData = {
+    val components = List(
+      ComponentDefinition("source", new Source),
+      ComponentDefinition("sink", SinkFactory.noParam(new Sink {}))
+    ) ::: additionalComponents
 
-    val configCreator: ProcessConfigCreator = new EmptyProcessConfigCreator {
-
-      override def services(
-          processObjectDependencies: ProcessObjectDependencies
-      ): Map[String, WithCategories[Service]] = servicesToUse.mapValuesNow(WithCategories.anyCategory)
-
-      override def sourceFactories(
-          processObjectDependencies: ProcessObjectDependencies
-      ): Map[String, WithCategories[SourceFactory]] =
-        Map("source" -> WithCategories.anyCategory(new Source))
-
-      override def sinkFactories(
-          processObjectDependencies: ProcessObjectDependencies
-      ): Map[String, WithCategories[SinkFactory]] = Map(
-        "sink" -> WithCategories.anyCategory(SinkFactory.noParam(new Sink {}))
-      )
-    }
-
-    val definitions = ProcessDefinitionExtractor.extractObjectWithMethods(
-      configCreator,
-      getClass.getClassLoader,
-      api.process.ProcessObjectDependencies(ConfigFactory.empty(), ObjectNamingProvider(getClass.getClassLoader)),
-      category = None
+    val definitions = ModelDefinition(
+      ComponentDefinitionWithImplementation
+        .forList(components, ComponentsUiConfig.Empty, id => DesignerWideComponentId(id.toString), Map.empty),
+      ModelDefinitionBuilder.emptyExpressionConfig,
+      ClassExtractionSettings.Default
     )
-    val definitionsWithTypes = ModelDefinitionWithTypes(definitions)
+    val definitionsWithTypes = ModelDefinitionWithClasses(definitions)
 
     ProcessCompilerData.prepare(
-      process,
-      ConfigFactory.empty(),
       definitionsWithTypes,
       new SimpleDictRegistry(Map.empty).toEngineRegistry,
-      listeners,
+      List.empty,
       getClass.getClassLoader,
       ProductionServiceInvocationCollector,
       ComponentUseCase.EngineRuntime,
@@ -93,7 +74,7 @@ class InterpreterSetup[T: ClassTag] {
     case Invalid(err) => throw new IllegalArgumentException(err.toList.mkString("Compilation errors: ", ", ", ""))
   }
 
-  class Source extends SourceFactory {
+  class Source extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke
     def create(): api.process.Source = null

@@ -2,7 +2,7 @@ package pl.touk.nussknacker.ui.config
 
 import com.typesafe.config.Config
 import net.ceedubs.ficus.readers.{OptionReader, ValueReader}
-import pl.touk.nussknacker.engine.api.component.ComponentId
+import pl.touk.nussknacker.engine.api.component.DesignerWideComponentId
 import pl.touk.nussknacker.engine.api.component.ComponentType.ComponentType
 import pl.touk.nussknacker.engine.util.UriUtils
 import pl.touk.nussknacker.restmodel.component.ComponentLink
@@ -14,6 +14,7 @@ final case class ComponentLinkConfig(
     title: String,
     icon: URI,
     url: URI,
+    // FIXME: It should be probably supportedComponentIds - currently this filtering is unusable
     supportedComponentTypes: Option[List[ComponentType]]
 ) {
   import ComponentLinkConfig._
@@ -21,12 +22,13 @@ final case class ComponentLinkConfig(
   def isAvailable(componentType: ComponentType): Boolean =
     supportedComponentTypes.isEmpty || supportedComponentTypes.exists(_.contains(componentType))
 
-  def toComponentLink(componentId: ComponentId, componentName: String): ComponentLink = ComponentLink(
-    id,
-    fillByComponentData(title, componentId, componentName),
-    URI.create(fillByComponentData(icon.toString, componentId, componentName, urlOption = true)),
-    URI.create(fillByComponentData(url.toString, componentId, componentName, urlOption = true))
-  )
+  def toComponentLink(designerWideComponentId: DesignerWideComponentId, componentName: String): ComponentLink =
+    ComponentLink(
+      id,
+      fillByComponentData(title, designerWideComponentId, componentName),
+      URI.create(fillByComponentData(icon.toString, designerWideComponentId, componentName, urlOption = true)),
+      URI.create(fillByComponentData(url.toString, designerWideComponentId, componentName, urlOption = true))
+    )
 
 }
 
@@ -34,25 +36,16 @@ object ComponentLinkConfig {
   val ComponentIdTemplate   = "$componentId"
   val ComponentNameTemplate = "$componentName"
 
-  def create(
-      id: String,
-      title: String,
-      icon: String,
-      url: String,
-      supportedComponentTypes: Option[List[ComponentType]]
-  ): ComponentLinkConfig =
-    ComponentLinkConfig(id, title, URI.create(icon), URI.create(url), supportedComponentTypes)
-
-  def fillByComponentData(
+  private def fillByComponentData(
       text: String,
-      componentId: ComponentId,
+      designerWideComponentId: DesignerWideComponentId,
       componentName: String,
       urlOption: Boolean = false
   ): String = {
     val name = if (urlOption) UriUtils.encodeURIComponent(componentName) else componentName
 
     text
-      .replace(ComponentIdTemplate, componentId.value)
+      .replace(ComponentIdTemplate, designerWideComponentId.value)
       .replace(ComponentNameTemplate, name)
   }
 

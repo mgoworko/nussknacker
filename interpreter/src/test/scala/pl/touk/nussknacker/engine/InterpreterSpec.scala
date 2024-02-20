@@ -3,30 +3,27 @@ package pl.touk.nussknacker.engine
 import cats.data.Validated.{Invalid, Valid}
 import cats.data.{NonEmptyList, Validated, ValidatedNel}
 import cats.effect.IO
-import com.typesafe.config.ConfigFactory
+import cats.effect.unsafe.IORuntime
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import org.springframework.expression.spel.standard.SpelExpression
 import pl.touk.nussknacker.engine.InterpreterSpec._
 import pl.touk.nussknacker.engine.api._
+import pl.touk.nussknacker.engine.api.component.{ComponentDefinition, DesignerWideComponentId, UnboundedStreamComponent}
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.InvalidFragment
 import pl.touk.nussknacker.engine.api.context.transformation.{
   DefinedEagerParameter,
   DefinedLazyParameter,
   NodeDependencyValue,
-  SingleInputGenericNodeTransformation
+  SingleInputDynamicComponent
 }
 import pl.touk.nussknacker.engine.api.context.{ContextTransformation, ProcessCompilationError, ValidationContext}
-import pl.touk.nussknacker.engine.api.definition.{
-  NodeDependency,
-  OutputVariableNameDependency,
-  ParameterWithExtractor,
-  SpelTemplateParameterEditor
-}
+import pl.touk.nussknacker.engine.api.definition.{AdditionalVariable => _, _}
+import pl.touk.nussknacker.engine.api.dict.embedded.EmbeddedDictDefinition
 import pl.touk.nussknacker.engine.api.exception.NuExceptionInfo
-import pl.touk.nussknacker.engine.api.expression.{Expression => _, _}
+import pl.touk.nussknacker.engine.api.expression.{Expression => CompiledExpression, _}
 import pl.touk.nussknacker.engine.api.generics.ExpressionParseError
-import pl.touk.nussknacker.engine.api.process.{EmptyProcessConfigCreator, _}
+import pl.touk.nussknacker.engine.api.process._
 import pl.touk.nussknacker.engine.api.test.InvocationCollectors
 import pl.touk.nussknacker.engine.api.typed.typing
 import pl.touk.nussknacker.engine.api.typed.typing.{Typed, TypingResult}
@@ -35,24 +32,25 @@ import pl.touk.nussknacker.engine.canonicalgraph.canonicalnode.FlatNode
 import pl.touk.nussknacker.engine.canonicalgraph.{CanonicalProcess, canonicalnode}
 import pl.touk.nussknacker.engine.compile._
 import pl.touk.nussknacker.engine.compiledgraph.part.{CustomNodePart, ProcessPart, SinkPart}
-import pl.touk.nussknacker.engine.definition.ProcessDefinitionExtractor
-import pl.touk.nussknacker.engine.definition.ProcessDefinitionExtractor.ModelDefinitionWithTypes
+import pl.touk.nussknacker.engine.definition.component.ComponentDefinitionWithImplementation
+import pl.touk.nussknacker.engine.definition.model.{ModelDefinition, ModelDefinitionWithClasses}
 import pl.touk.nussknacker.engine.dict.SimpleDictRegistry
-import pl.touk.nussknacker.engine.graph.evaluatedparam.Parameter
+import pl.touk.nussknacker.engine.graph.evaluatedparam.{Parameter => NodeParameter}
 import pl.touk.nussknacker.engine.graph.expression._
 import pl.touk.nussknacker.engine.graph.fragment.FragmentRef
 import pl.touk.nussknacker.engine.graph.node.FragmentInputDefinition.{FragmentClazzRef, FragmentParameter}
 import pl.touk.nussknacker.engine.graph.node._
 import pl.touk.nussknacker.engine.graph.sink.SinkRef
 import pl.touk.nussknacker.engine.graph.variable.Field
+import pl.touk.nussknacker.engine.modelconfig.ComponentsUiConfig
 import pl.touk.nussknacker.engine.resultcollector.ProductionServiceInvocationCollector
 import pl.touk.nussknacker.engine.spel.SpelExpressionRepr
-import pl.touk.nussknacker.engine.util.namespaces.ObjectNamingProvider
+import pl.touk.nussknacker.engine.testing.ModelDefinitionBuilder
 import pl.touk.nussknacker.engine.util.service.{
   EagerServiceWithStaticParametersAndReturnType,
   EnricherContextTransformation
 }
-import pl.touk.nussknacker.engine.util.{LoggingListener, SynchronousExecutionContext}
+import pl.touk.nussknacker.engine.util.{LoggingListener, SynchronousExecutionContextAndIORuntime}
 
 import java.util.{Collections, Optional}
 import javax.annotation.Nullable
@@ -60,27 +58,27 @@ import javax.validation.constraints.NotBlank
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Success, Try}
 
-class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
+class InterpreterSpec extends AnyFunSuite with Matchers {
 
   import pl.touk.nussknacker.engine.spel.Implicits._
-  import pl.touk.nussknacker.engine.util.Implicits._
 
   val resultVariable = "result"
 
-  val servicesDef = Map(
-    "accountService"                  -> AccountService,
-    "dictService"                     -> NameDictService,
-    "spelNodeService"                 -> SpelNodeService,
-    "withExplicitMethod"              -> WithExplicitDefinitionService,
-    "spelTemplateService"             -> ServiceUsingSpelTemplate,
-    "optionTypesService"              -> OptionTypesService,
-    "optionalTypesService"            -> OptionalTypesService,
-    "nullableTypesService"            -> NullableTypesService,
-    "mandatoryTypesService"           -> MandatoryTypesService,
-    "notBlankTypesService"            -> NotBlankTypesService,
-    "eagerServiceWithMethod"          -> EagerServiceWithMethod,
-    "dynamicEagerService"             -> DynamicEagerService,
-    "eagerServiceWithFixedAdditional" -> EagerServiceWithFixedAdditional
+  private val servicesDef = List(
+    ComponentDefinition("accountService", AccountService),
+    ComponentDefinition("dictService", NameDictService),
+    ComponentDefinition("spelNodeService", SpelNodeService),
+    ComponentDefinition("withExplicitMethod", WithExplicitDefinitionService),
+    ComponentDefinition("spelTemplateService", ServiceUsingSpelTemplate),
+    ComponentDefinition("optionTypesService", OptionTypesService),
+    ComponentDefinition("optionalTypesService", OptionalTypesService),
+    ComponentDefinition("nullableTypesService", NullableTypesService),
+    ComponentDefinition("mandatoryTypesService", MandatoryTypesService),
+    ComponentDefinition("notBlankTypesService", NotBlankTypesService),
+    ComponentDefinition("eagerServiceWithMethod", EagerServiceWithMethod),
+    ComponentDefinition("dynamicEagerService", DynamicEagerService),
+    ComponentDefinition("eagerServiceWithFixedAdditional", EagerServiceWithFixedAdditional),
+    ComponentDefinition("dictParameterEditorService", DictParameterEditorService),
   )
 
   def listenersDef(listener: Option[ProcessListener] = None): Seq[ProcessListener] =
@@ -89,38 +87,43 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
   private def interpretValidatedProcess(
       process: ValidatedNel[_, CanonicalProcess],
       transaction: Transaction,
-      listeners: Seq[ProcessListener] = listenersDef(),
-      services: Map[String, Service] = servicesDef
+      additionalComponents: List[ComponentDefinition],
+      listeners: Seq[ProcessListener] = listenersDef()
   ): Any = {
-    interpretProcess(process.toOption.get, transaction, listeners, services)
+    interpretProcess(process.toOption.get, transaction, additionalComponents, listeners)
   }
 
   private def interpretProcess(
       scenario: CanonicalProcess,
       transaction: Transaction,
+      additionalComponents: List[ComponentDefinition] = servicesDef,
       listeners: Seq[ProcessListener] = listenersDef(),
-      services: Map[String, Service] = servicesDef,
-      transformers: Map[String, CustomStreamTransformer] = Map()
   ): Any = {
     import Interpreter._
-    import SynchronousExecutionContext.ctx
 
     AccountService.clear()
     NameDictService.clear()
 
-    val metaData                                    = scenario.metaData
-    implicit val componentUseCase: ComponentUseCase = ComponentUseCase.EngineRuntime
-    val processCompilerData                         = compile(services, transformers, scenario, listeners)
-    val interpreter                                 = processCompilerData.interpreter
-    val parts                                       = failOnErrors(processCompilerData.compile())
+    val metaData = scenario.metaData
+    val processCompilerData =
+      prepareCompilerData(additionalComponents, listeners)
+    val interpreter = processCompilerData.interpreter
+    val parts       = failOnErrors(processCompilerData.compile(scenario))
 
     def compileNode(part: ProcessPart) =
       failOnErrors(processCompilerData.subPartCompiler.compile(part.node, part.validationContext)(metaData).result)
 
-    val initialCtx = Context("abc").withVariable(VariableConstants.InputVariableName, transaction)
+    val initialCtx                    = Context("abc").withVariable(VariableConstants.InputVariableName, transaction)
+    val serviceExecutionContext       = ServiceExecutionContext(SynchronousExecutionContextAndIORuntime.syncEc)
+    implicit val ioRuntime: IORuntime = SynchronousExecutionContextAndIORuntime.syncIoRuntime
 
     val resultBeforeSink = interpreter
-      .interpret[IO](compileNode(parts.sources.head), scenario.metaData, initialCtx)
+      .interpret[IO](
+        compileNode(parts.sources.head),
+        scenario.metaData,
+        initialCtx,
+        serviceExecutionContext
+      )
       .unsafeRunSync()
       .head match {
       case Left(result)         => result
@@ -134,7 +137,12 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
           case endingCustomPart: CustomNodePart if endingCustomPart.id == nextPartId => endingCustomPart
         }.get
         interpreter
-          .interpret(compileNode(sink), metaData, resultBeforeSink.finalContext)
+          .interpret[IO](
+            compileNode(sink),
+            metaData,
+            resultBeforeSink.finalContext,
+            serviceExecutionContext
+          )
           .unsafeRunSync()
           .head
           .swap
@@ -155,54 +163,29 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
     }
   }
 
-  def compile(
-      servicesToUse: Map[String, Service],
-      customStreamTransformersToUse: Map[String, CustomStreamTransformer],
-      process: CanonicalProcess,
+  def prepareCompilerData(
+      additionalComponents: List[ComponentDefinition],
       listeners: Seq[ProcessListener]
   ): ProcessCompilerData = {
+    val components =
+      ComponentDefinition("transaction-source", TransactionSource) ::
+        ComponentDefinition("dummySink", SinkFactory.noParam(new pl.touk.nussknacker.engine.api.process.Sink {})) ::
+        additionalComponents
 
-    val configCreator: ProcessConfigCreator = new EmptyProcessConfigCreator {
-
-      override def customStreamTransformers(
-          processObjectDependencies: ProcessObjectDependencies
-      ): Map[String, WithCategories[CustomStreamTransformer]] =
-        customStreamTransformersToUse.mapValuesNow(WithCategories.anyCategory)
-
-      override def services(
-          processObjectDependencies: ProcessObjectDependencies
-      ): Map[String, WithCategories[Service]] = servicesToUse.mapValuesNow(WithCategories.anyCategory)
-
-      override def sourceFactories(
-          processObjectDependencies: ProcessObjectDependencies
-      ): Map[String, WithCategories[SourceFactory]] =
-        Map("transaction-source" -> WithCategories.anyCategory(TransactionSource))
-
-      override def sinkFactories(
-          processObjectDependencies: ProcessObjectDependencies
-      ): Map[String, WithCategories[SinkFactory]] = Map(
-        "dummySink" -> WithCategories.anyCategory(
-          SinkFactory.noParam(new pl.touk.nussknacker.engine.api.process.Sink {})
-        )
-      )
-
-      override def expressionConfig(processObjectDependencies: ProcessObjectDependencies): ExpressionConfig = super
-        .expressionConfig(processObjectDependencies)
-        .copy(languages = LanguageConfiguration(List(LiteralExpressionParser)), dynamicPropertyAccessAllowed = true)
-    }
-
-    val definitions = ProcessDefinitionExtractor.extractObjectWithMethods(
-      configCreator,
-      getClass.getClassLoader,
-      api.process.ProcessObjectDependencies(ConfigFactory.empty(), ObjectNamingProvider(getClass.getClassLoader)),
-      category = None
+    val definitions = ModelDefinition(
+      ComponentDefinitionWithImplementation
+        .forList(components, ComponentsUiConfig.Empty, id => DesignerWideComponentId(id.toString), Map.empty),
+      ModelDefinitionBuilder.emptyExpressionConfig.copy(
+        languages = LanguageConfiguration(List(LiteralExpressionParser))
+      ),
+      ClassExtractionSettings.Default
     )
-    val definitionsWithTypes = ModelDefinitionWithTypes(definitions)
+    val definitionsWithTypes = ModelDefinitionWithClasses(definitions)
     ProcessCompilerData.prepare(
-      process,
-      ConfigFactory.empty(),
       definitionsWithTypes,
-      new SimpleDictRegistry(Map.empty).toEngineRegistry,
+      new SimpleDictRegistry(
+        Map("someDictId" -> EmbeddedDictDefinition(Map("someKey" -> "someLabel")))
+      ).toEngineRegistry,
       listeners,
       getClass.getClassLoader,
       ProductionServiceInvocationCollector,
@@ -276,17 +259,14 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
   }
 
   test("ignore disabled processors") {
-    var nodes = List[Any]()
+    object SomeService extends Service {
+      var nodes: List[Any] = List[Any]()
 
-    val services = Map(
-      "service" ->
-        new Service {
-          @MethodToInvoke
-          def invoke(@ParamName("id") id: Any)(implicit ec: ExecutionContext) = Future {
-            nodes = id :: nodes
-          }
-        }
-    )
+      @MethodToInvoke
+      def invoke(@ParamName("id") id: Any)(implicit ec: ExecutionContext): Future[Unit] = Future {
+        nodes = id :: nodes
+      }
+    }
 
     val scenario = ScenarioBuilder
       .streaming("test")
@@ -294,14 +274,13 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       .disabledProcessor("disabled", "service", params = "id" -> "'disabled'")
       .processor("enabled", "service", "id" -> "'enabled'")
       .disabledProcessorEnd("disabledEnd", "service", "id" -> "'disabled'")
-    interpretProcess(scenario, Transaction(), Seq.empty, services)
+    interpretProcess(scenario, Transaction(), List(ComponentDefinition("service", SomeService)))
 
-    nodes shouldBe List("enabled")
+    SomeService.nodes shouldBe List("enabled")
   }
 
   test("invoke processors") {
-    val accountId   = "333"
-    var result: Any = ""
+    val accountId = "333"
 
     val process = ScenarioBuilder
       .streaming("test")
@@ -309,24 +288,26 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       .processor("process", "transactionService", "id" -> "#input.accountId")
       .emptySink("end", "dummySink")
 
-    val services = Map(
-      "transactionService" ->
-        new Service {
-          @MethodToInvoke
-          def invoke(@ParamName("id") id: Any)(implicit ec: ExecutionContext) = Future {
-            result = id
-          }
-        }
+    object TransactionService extends Service {
+      var result: Any = ""
+
+      @MethodToInvoke
+      def invoke(@ParamName("id") id: Any)(implicit ec: ExecutionContext): Future[Unit] = Future {
+        result = id
+      }
+    }
+
+    interpretProcess(
+      process,
+      Transaction(accountId = accountId),
+      List(ComponentDefinition("transactionService", TransactionService))
     )
 
-    interpretProcess(process, Transaction(accountId = accountId), Seq.empty, services)
-
-    result should equal(accountId)
+    TransactionService.result should equal(accountId)
   }
 
   test("build node graph ended-up with processor") {
-    val accountId   = "333"
-    var result: Any = ""
+    val accountId = "333"
 
     val process =
       ScenarioBuilder
@@ -334,19 +315,21 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
         .source("start", "transaction-source")
         .processorEnd("process", "transactionService", "id" -> "#input.accountId")
 
-    val services = Map(
-      "transactionService" ->
-        new Service {
-          @MethodToInvoke
-          def invoke(@ParamName("id") id: Any)(implicit ec: ExecutionContext) = Future {
-            result = id
-          }
-        }
+    object TransactionService extends Service {
+      var result: Any = ""
+      @MethodToInvoke
+      def invoke(@ParamName("id") id: Any)(implicit ec: ExecutionContext): Future[Unit] = Future {
+        result = id
+      }
+    }
+
+    interpretProcess(
+      process,
+      Transaction(accountId = accountId),
+      List(ComponentDefinition("transactionService", TransactionService))
     )
 
-    interpretProcess(process, Transaction(accountId = accountId), Seq.empty, services)
-
-    result should equal(accountId)
+    TransactionService.result should equal(accountId)
   }
 
   test("build node graph ended-up with custom node") {
@@ -355,18 +338,16 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       ScenarioBuilder
         .streaming("test")
         .source("start", "transaction-source")
-        .endingCustomNode("process", None, "transactionCustomNode")
+        .endingCustomNode("process", None, "transactionCustomComponent")
 
-    val transformers = Map(
-      "transactionCustomNode" ->
-        new CustomStreamTransformer {
-          @MethodToInvoke
-          def create(): Unit = {}
+    object TransactionCustomComponent extends CustomStreamTransformer {
+      @MethodToInvoke
+      def create(): Unit = {}
 
-          override def canBeEnding: Boolean = true
-        }
-    )
-    interpretProcess(process, Transaction(accountId = accountId), Seq.empty, transformers = transformers)
+      override def canBeEnding: Boolean = true
+    }
+    val components = List(ComponentDefinition("transactionCustomComponent", TransactionCustomComponent))
+    interpretProcess(process, Transaction(accountId = accountId), components)
   }
 
   test("enrich context") {
@@ -385,7 +366,7 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       .streaming("test")
       .source("startVB", "transaction-source")
       .buildVariable("buildVar", "fooVar", "accountId" -> "#input.accountId")
-      .buildSimpleVariable("result-end", resultVariable, "#fooVar['accountId']": Expression)
+      .buildSimpleVariable("result-end", resultVariable, "#fooVar.accountId": Expression)
       .emptySink("end-end", "dummySink")
 
     interpretProcess(process, Transaction(accountId = "123")) should equal("123")
@@ -428,16 +409,24 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
         nodeResults = nodeResults :+ nodeId
       }
 
-      override def endEncountered(nodeId: String, ref: String, context: Context, processMetaData: MetaData): Unit = {}
+      override def endEncountered(
+          nodeId: String,
+          ref: String,
+          context: Context,
+          processMetaData: MetaData
+      ): Unit = {}
 
-      override def deadEndEncountered(lastNodeId: String, context: Context, processMetaData: MetaData): Unit = {}
+      override def deadEndEncountered(
+          lastNodeId: String,
+          context: Context,
+          processMetaData: MetaData
+      ): Unit = {}
 
       override def serviceInvoked(
           nodeId: String,
           id: String,
           context: Context,
           processMetaData: MetaData,
-          params: Map[String, Any],
           result: Try[Any]
       ): Unit = {
         serviceResults = serviceResults + (id -> result)
@@ -470,18 +459,18 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       .filter("filter", "#input.accountId == '123'", falseEnd)
       .emptySink("end", "dummySink")
 
-    interpretProcess(process1, Transaction(), listenersDef(Some(listener)))
+    interpretProcess(process1, Transaction(), listeners = listenersDef(Some(listener)))
     nodeResults should equal(List("start", "enrich", "end"))
     serviceResults should equal(
       Map("accountService" -> Success(Account(marketingAgreement1 = false, "zielonka", "bordo")))
     )
 
     nodeResults = List()
-    interpretProcess(process2, Transaction(), listenersDef(Some(listener)))
+    interpretProcess(process2, Transaction(), listeners = listenersDef(Some(listener)))
     nodeResults should equal(List("start", "filter", "end"))
 
     nodeResults = List()
-    interpretProcess(process2, Transaction(accountId = "333"), listenersDef(Some(listener)))
+    interpretProcess(process2, Transaction(accountId = "333"), listeners = listenersDef(Some(listener)))
     nodeResults should equal(List("start", "filter", "falseEnd"))
 
   }
@@ -511,7 +500,7 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       List.empty
     )
 
-    val resolved = FragmentResolver(Set(fragment)).resolve(process)
+    val resolved = FragmentResolver(List(fragment)).resolve(process)
 
     resolved shouldBe Symbol("valid")
 
@@ -553,7 +542,7 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       List.empty
     )
 
-    val resolved = FragmentResolver(Set(fragment)).resolve(process)
+    val resolved = FragmentResolver(List(fragment)).resolve(process)
 
     resolved shouldBe Symbol("valid")
 
@@ -569,7 +558,7 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       .emptySink("end-sink", "dummySink")
     val emptyFragment = CanonicalProcess(MetaData("fragment1", FragmentSpecificData()), List.empty, List.empty)
 
-    val resolved = FragmentResolver(Set(emptyFragment)).resolve(process)
+    val resolved = FragmentResolver(List(emptyFragment)).resolve(process)
 
     resolved should matchPattern { case Invalid(NonEmptyList(InvalidFragment("fragment1", "sub"), Nil)) =>
     }
@@ -600,7 +589,7 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       List.empty
     )
 
-    val resolved = FragmentResolver(Set(fragment)).resolve(process)
+    val resolved = FragmentResolver(List(fragment)).resolve(process)
 
     resolved shouldBe Symbol("valid")
 
@@ -628,7 +617,7 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       List.empty
     )
 
-    val resolved = FragmentResolver(Set(fragment)).resolve(process)
+    val resolved = FragmentResolver(List(fragment)).resolve(process)
 
     resolved shouldBe Symbol("valid")
 
@@ -664,14 +653,14 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       List(
         FlatNode(FragmentInputDefinition("start", List(FragmentParameter("param", FragmentClazzRef[String])))),
         canonicalnode.Fragment(
-          FragmentInput("sub2", FragmentRef("fragment1", List(Parameter("param", "#param")))),
+          FragmentInput("sub2", FragmentRef("fragment1", List(NodeParameter("param", "#param")))),
           Map("output" -> List(FlatNode(FragmentOutputDefinition("sub2Out", "output", List.empty))))
         )
       ),
       List.empty
     )
 
-    val resolved = FragmentResolver(Set(fragment, nested)).resolve(process)
+    val resolved = FragmentResolver(List(fragment, nested)).resolve(process)
 
     resolved shouldBe Symbol("valid")
 
@@ -720,7 +709,7 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       List.empty
     )
 
-    val resolved = FragmentResolver(Set(fragment)).resolve(process)
+    val resolved = FragmentResolver(List(fragment)).resolve(process)
 
     resolved shouldBe Symbol("valid")
 
@@ -745,7 +734,7 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       List.empty
     )
 
-    val resolved = FragmentResolver(Set(fragment)).resolve(process)
+    val resolved = FragmentResolver(List(fragment)).resolve(process)
 
     resolved shouldBe Symbol("valid")
 
@@ -777,7 +766,7 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       List.empty
     )
 
-    val resolved = FragmentResolver(Set(fragment)).resolve(process)
+    val resolved = FragmentResolver(List(fragment)).resolve(process)
     resolved shouldBe Symbol("valid")
     interpretValidatedProcess(resolved, Transaction(accountId = "a"), List.empty) shouldBe "8"
   }
@@ -792,7 +781,7 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       .emptySink("end-end", "dummySink")
 
     intercept[CustomException] {
-      interpretProcess(process, Transaction(), services = Map("p1" -> new ThrowingService))
+      interpretProcess(process, Transaction(), List(ComponentDefinition("p1", new ThrowingService)))
     }.getMessage shouldBe "Fail?"
   }
 
@@ -806,7 +795,7 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
       .emptySink("end-end", "dummySink")
 
     intercept[CustomException] {
-      interpretProcess(process, Transaction(), services = Map("p1" -> new ThrowingService))
+      interpretProcess(process, Transaction(), List(ComponentDefinition("p1", new ThrowingService)))
     }.getMessage shouldBe "Fail?"
   }
 
@@ -966,6 +955,22 @@ class InterpreterSpec extends AnyFunSuite with Matchers { // TODO new tests
     interpretProcess(process, Transaction()) shouldBe new Helper().value
   }
 
+  test("handle DictParameterEditor with known dictionary and key") {
+    val process = ScenarioBuilder
+      .streaming("test")
+      .source("start", "transaction-source")
+      .enricher(
+        "customNode",
+        "data",
+        "dictParameterEditorService",
+        "param" -> Expression.dictKeyWithLabel("someKey", Some("someLabel"))
+      )
+      .buildSimpleVariable("result-end", resultVariable, "#data")
+      .emptySink("end-end", "dummySink")
+
+    interpretProcess(process, Transaction()) shouldBe "someKey"
+  }
+
 }
 
 class ThrowingService extends Service {
@@ -1053,7 +1058,7 @@ object InterpreterSpec {
     def invoke(@ParamName("expression") @NotBlank expr: String) = Future.successful(expr)
   }
 
-  object TransactionSource extends SourceFactory {
+  object TransactionSource extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke(returnType = classOf[Transaction])
     def create(): api.process.Source = null
@@ -1062,40 +1067,62 @@ object InterpreterSpec {
 
   object WithExplicitDefinitionService extends EagerServiceWithStaticParametersAndReturnType {
 
-    override def parameters: List[api.definition.Parameter] = List(api.definition.Parameter[Long]("param1"))
+    override def parameters: List[Parameter] = List(Parameter[Long]("param1"))
 
     override def returnType: typing.TypingResult = Typed[String]
 
-    override def invoke(params: Map[String, Any])(
+    override def invoke(params: Params)(
         implicit ec: ExecutionContext,
         collector: InvocationCollectors.ServiceInvocationCollector,
         contextId: ContextId,
         metaData: MetaData,
         componentUseCase: ComponentUseCase
     ): Future[AnyRef] = {
-      Future.successful(params.head._2.toString)
+      Future.successful(params.nameToValueMap.head._2.toString)
     }
 
   }
 
   object ServiceUsingSpelTemplate extends EagerServiceWithStaticParametersAndReturnType {
 
-    private val spelTemplateParameter = api.definition.Parameter
+    private val spelTemplateParameter = Parameter
       .optional[String]("template")
       .copy(isLazyParameter = true, editor = Some(SpelTemplateParameterEditor))
 
-    override def parameters: List[api.definition.Parameter] = List(spelTemplateParameter)
+    override def parameters: List[Parameter] = List(spelTemplateParameter)
 
     override def returnType: typing.TypingResult = Typed[String]
 
-    override def invoke(params: Map[String, Any])(
+    override def invoke(params: Params)(
         implicit ec: ExecutionContext,
         collector: InvocationCollectors.ServiceInvocationCollector,
         contextId: ContextId,
         metaData: MetaData,
         componentUseCase: ComponentUseCase
     ): Future[AnyRef] = {
-      Future.successful(params.head._2.toString)
+      Future.successful(params.nameToValueMap.head._2.toString)
+    }
+
+  }
+
+  object DictParameterEditorService extends EagerServiceWithStaticParametersAndReturnType {
+
+    override def parameters: List[Parameter] = List(
+      Parameter[String]("param").copy(
+        editor = Some(DictParameterEditor("someDictId"))
+      )
+    )
+
+    override def returnType: typing.TypingResult = Typed[String]
+
+    override def invoke(params: Params)(
+        implicit ec: ExecutionContext,
+        collector: InvocationCollectors.ServiceInvocationCollector,
+        contextId: ContextId,
+        metaData: MetaData,
+        componentUseCase: ComponentUseCase
+    ): Future[Any] = {
+      Future.successful(params.nameToValueMap.head._2.toString)
     }
 
   }
@@ -1110,17 +1137,17 @@ object InterpreterSpec {
         expectedType: typing.TypingResult
     ): Validated[NonEmptyList[ExpressionParseError], TypedExpression] =
       parseWithoutContextValidation(original, expectedType).map(
-        TypedExpression(_, Typed[String], LiteralExpressionTypingInfo(typing.Unknown))
+        TypedExpression(_, LiteralExpressionTypingInfo(typing.Unknown))
       )
 
     override def parseWithoutContextValidation(
         original: String,
         expectedType: TypingResult
-    ): Validated[NonEmptyList[ExpressionParseError], pl.touk.nussknacker.engine.api.expression.Expression] = Valid(
+    ): Validated[NonEmptyList[ExpressionParseError], CompiledExpression] = Valid(
       LiteralExpression(original)
     )
 
-    case class LiteralExpression(original: String) extends pl.touk.nussknacker.engine.api.expression.Expression {
+    case class LiteralExpression(original: String) extends CompiledExpression {
       override def language: String = languageId
 
       override def evaluate[T](ctx: Context, globals: Map[String, Any]): T = original.asInstanceOf[T]
@@ -1141,10 +1168,9 @@ object InterpreterSpec {
         param: String
     ): ServiceInvoker = new ServiceInvoker {
 
-      override def invokeService(params: Map[String, Any])(
+      override def invoke(context: Context)(
           implicit ec: ExecutionContext,
           collector: InvocationCollectors.ServiceInvocationCollector,
-          contextId: ContextId,
           componentUseCase: ComponentUseCase
       ): Future[Any] = {
         Future.successful(param)
@@ -1169,13 +1195,12 @@ object InterpreterSpec {
         lazyOne.returnType, {
           if (eagerOne != checkEager) throw new IllegalArgumentException("Should be not empty?")
           new ServiceInvoker {
-            override def invokeService(params: Map[String, Any])(
+            override def invoke(context: Context)(
                 implicit ec: ExecutionContext,
                 collector: InvocationCollectors.ServiceInvocationCollector,
-                contextId: ContextId,
                 componentUseCase: ComponentUseCase
             ): Future[AnyRef] = {
-              Future.successful(params("lazy").asInstanceOf[AnyRef])
+              Future.successful(lazyOne.evaluate(context))
             }
           }
         }
@@ -1183,7 +1208,7 @@ object InterpreterSpec {
 
   }
 
-  object DynamicEagerService extends EagerService with SingleInputGenericNodeTransformation[ServiceInvoker] {
+  object DynamicEagerService extends EagerService with SingleInputDynamicComponent[ServiceInvoker] {
 
     override type State = Nothing
 
@@ -1193,7 +1218,7 @@ object InterpreterSpec {
 
     override def contextTransformation(context: ValidationContext, dependencies: List[NodeDependencyValue])(
         implicit nodeId: NodeId
-    ): DynamicEagerService.NodeTransformationDefinition = {
+    ): DynamicEagerService.ContextTransformationDefinition = {
       case TransformationStep(Nil, _) =>
         NextParameters(List(staticParam.parameter))
       case TransformationStep((`staticParamName`, DefinedEagerParameter(value: String, _)) :: Nil, _) =>
@@ -1204,12 +1229,12 @@ object InterpreterSpec {
             _
           ) if value == otherName =>
         FinalResults.forValidation(context)(
-          _.withVariable(OutputVariableNameDependency.extract(dependencies), expression.returnType, None)
+          _.withVariable(OutputVariableNameDependency.extract(dependencies), expression, None)
         )
     }
 
     override def implementation(
-        params: Map[String, Any],
+        params: Params,
         dependencies: List[NodeDependencyValue],
         finalState: Option[Nothing]
     ): ServiceInvoker = {
@@ -1217,13 +1242,13 @@ object InterpreterSpec {
       val paramName = staticParam.extractValue(params)
 
       new ServiceInvoker {
-        override def invokeService(params: Map[String, Any])(
+        override def invoke(context: Context)(
             implicit ec: ExecutionContext,
             collector: InvocationCollectors.ServiceInvocationCollector,
-            contextId: ContextId,
             componentUseCase: ComponentUseCase
         ): Future[AnyRef] = {
-          Future.successful(params(paramName).asInstanceOf[AnyRef])
+          val value = params.extractOrEvaluateUnsafe[AnyRef](paramName, context)
+          Future.successful(value)
         }
       }
     }

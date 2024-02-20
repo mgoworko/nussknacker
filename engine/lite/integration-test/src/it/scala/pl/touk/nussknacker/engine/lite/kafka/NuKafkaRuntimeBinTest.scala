@@ -24,7 +24,6 @@ class NuKafkaRuntimeBinTest
       s"SCHEMA_REGISTRY_URL=$mappedSchemaRegistryAddress",
       // random management port to avoid clashing of ports
       "CONFIG_FORCE_akka_management_http_port=0",
-      "CONFIG_FORCE_kafka_lowLevelComponentsEnabled=false",
       // It looks like github-actions doesn't look binding to 0.0.0.0, was problems like: Bind failed for TCP channel on endpoint [/10.1.0.183:0]
       "CONFIG_FORCE_akka_management_http_hostname=127.0.0.1",
       "KAFKA_AUTO_OFFSET_RESET=earliest"
@@ -44,7 +43,7 @@ class NuKafkaRuntimeBinTest
     kafkaContainer.start()          // must be started before prepareTestCaseFixture because it creates topic via api
     schemaRegistryContainer.start() // should be started after kafka
     fixture =
-      prepareTestCaseFixture(NuKafkaRuntimeTestSamples.pingPongScenarioId, NuKafkaRuntimeTestSamples.pingPongScenario)
+      prepareTestCaseFixture(NuKafkaRuntimeTestSamples.pingPongScenarioName, NuKafkaRuntimeTestSamples.pingPongScenario)
     registerSchemas()
     MultipleContainers(kafkaContainer, schemaRegistryContainer)
   }

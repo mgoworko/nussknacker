@@ -15,10 +15,10 @@ import pl.touk.nussknacker.ui._
 import pl.touk.nussknacker.ui.listener.ProcessChangeEvent._
 import pl.touk.nussknacker.ui.listener.{ProcessChangeEvent, ProcessChangeListener, User}
 import pl.touk.nussknacker.ui.process.ProcessService.{
-  CreateProcessCommand,
+  CreateScenarioCommand,
   FetchScenarioGraph,
   GetScenarioWithDetailsOptions,
-  UpdateProcessCommand
+  UpdateScenarioCommand
 }
 import pl.touk.nussknacker.ui.process._
 import pl.touk.nussknacker.ui.process.deployment.DeploymentService
@@ -33,13 +33,13 @@ import ScenarioWithDetailsConversions._
 class ProcessesResources(
     protected val processService: ProcessService,
     deploymentService: DeploymentService,
-    processToolbarService: ProcessToolbarService,
+    processToolbarService: ScenarioToolbarService,
     val processAuthorizer: AuthorizeProcess,
     processChangeListener: ProcessChangeListener
 )(implicit val ec: ExecutionContext, mat: Materializer)
     extends Directives
     with FailFastCirceSupport
-    with EspPathMatchers
+    with NuPathMatchers
     with RouteWithUser
     with LazyLogging
     with AuthorizeProcessDirectives
@@ -53,13 +53,13 @@ class ProcessesResources(
         get {
           complete {
             processService
-              .getProcessesWithDetails(
+              .getLatestProcessesWithDetails(
                 ScenarioQuery(isArchived = Some(true)),
                 GetScenarioWithDetailsOptions.detailsOnly
               )
           }
         }
-      } ~ path("unarchive" / Segment) { processName =>
+      } ~ path("unarchive" / ProcessNameSegment) { processName =>
         (post & processId(processName)) { processId =>
           canWrite(processId) {
             complete {
@@ -69,7 +69,7 @@ class ProcessesResources(
             }
           }
         }
-      } ~ path("archive" / Segment) { processName =>
+      } ~ path("archive" / ProcessNameSegment) { processName =>
         (post & processId(processName)) { processId =>
           canWrite(processId) {
             complete {
@@ -83,7 +83,7 @@ class ProcessesResources(
         get {
           processesQuery { query =>
             complete {
-              processService.getProcessesWithDetails(
+              processService.getLatestProcessesWithDetails(
                 query,
                 GetScenarioWithDetailsOptions.detailsOnly.withFetchState
               )
@@ -91,26 +91,30 @@ class ProcessesResources(
           }
         }
       } ~ path("processesDetails") {
-        (get & processesQuery & skipValidateAndResolveParameter) { (query, skipValidateAndResolve) =>
-          complete {
-            processService.getProcessesWithDetails(
-              query,
-              GetScenarioWithDetailsOptions(FetchScenarioGraph(!skipValidateAndResolve), fetchState = false)
-            )
-          }
+        (get & processesQuery & skipValidateAndResolveParameter & skipNodeResultsParameter) {
+          (query, skipValidateAndResolve, skipNodeResults) =>
+            complete {
+              processService.getLatestProcessesWithDetails(
+                query,
+                GetScenarioWithDetailsOptions(
+                  FetchScenarioGraph(validationFlagsToMode(skipValidateAndResolve, skipNodeResults)),
+                  fetchState = false
+                )
+              )
+            }
         }
       } ~ path("processes" / "status") {
         get {
           complete {
             processService
-              .getProcessesWithDetails(
+              .getLatestProcessesWithDetails(
                 ScenarioQuery(isFragment = Some(false), isArchived = Some(false)),
                 GetScenarioWithDetailsOptions.detailsOnly.copy(fetchState = true)
               )
               .map(_.flatMap(details => details.state.map(details.name -> _)).toMap)
           }
         }
-      } ~ path("processes" / "import" / Segment) { processName =>
+      } ~ path("processes" / "import" / ProcessNameSegment) { processName =>
         processId(processName) { processId =>
           (canWrite(processId) & post) {
             fileUpload("process") { case (_, byteSource) =>
@@ -122,14 +126,14 @@ class ProcessesResources(
             }
           }
         }
-      } ~ path("processes" / Segment / "deployments") { processName =>
+      } ~ path("processes" / ProcessNameSegment / "deployments") { processName =>
         processId(processName) { processId =>
           complete {
             // FIXME: We should provide Deployment definition and return there all deployments, not actions..
             processService.getProcessActions(processId.id)
           }
         }
-      } ~ path("processes" / Segment) { processName =>
+      } ~ path("processes" / ProcessNameSegment) { processName =>
         processId(processName) { processId =>
           (delete & canWrite(processId)) {
             complete {
@@ -138,7 +142,7 @@ class ProcessesResources(
                 .withListenerNotifySideEffect(_ => OnDeleted(processId.id))
             }
           } ~ (put & canWrite(processId)) {
-            entity(as[UpdateProcessCommand]) { updateCommand =>
+            entity(as[UpdateScenarioCommand]) { updateCommand =>
               canOverrideUsername(processId.id, updateCommand.forwardedUserName)(ec, user) {
                 complete {
                   processService
@@ -150,37 +154,64 @@ class ProcessesResources(
                 }
               }
             }
-          } ~ (get & skipValidateAndResolveParameter) { skipValidateAndResolve =>
-            complete {
-              processService.getProcessWithDetails(
-                processId,
-                GetScenarioWithDetailsOptions(FetchScenarioGraph(!skipValidateAndResolve), fetchState = true)
-              )
-            }
+          } ~ (get & skipValidateAndResolveParameter & skipNodeResultsParameter) {
+            (skipValidateAndResolve, skipNodeResults) =>
+              complete {
+                processService.getLatestProcessWithDetails(
+                  processId,
+                  GetScenarioWithDetailsOptions(
+                    FetchScenarioGraph(validationFlagsToMode(skipValidateAndResolve, skipNodeResults)),
+                    fetchState = true
+                  )
+                )
+              }
           }
         }
-      } ~ path("processes" / Segment / "rename" / Segment) { (processName, newName) =>
+      } ~ path("processes" / ProcessNameSegment / "rename" / ProcessNameSegment) { (processName, newName) =>
         (put & processId(processName)) { processId =>
           canWrite(processId) {
             complete {
               processService
-                .renameProcess(processId, ProcessName(newName))
+                .renameProcess(processId, newName)
                 .withListenerNotifySideEffect(response => OnRenamed(processId.id, response.oldName, response.newName))
             }
           }
         }
-      } ~ path("processes" / Segment / VersionIdSegment) { (processName, versionId) =>
-        (get & processId(processName) & skipValidateAndResolveParameter) { (processId, skipValidateAndResolve) =>
-          complete {
-            processService.getProcessWithDetails(
-              processId,
-              versionId,
-              // TODO: disable fetching state when FE is ready
-              GetScenarioWithDetailsOptions(FetchScenarioGraph(!skipValidateAndResolve), fetchState = true)
-            )
+      } ~ path("processes" / ProcessNameSegment / VersionIdSegment) { (processName, versionId) =>
+        (get & processId(processName) & skipValidateAndResolveParameter & skipNodeResultsParameter) {
+          (processId, skipValidateAndResolve, skipNodeResults) =>
+            complete {
+              processService.getProcessWithDetails(
+                processId,
+                versionId,
+                // TODO: disable fetching state when FE is ready
+                GetScenarioWithDetailsOptions(
+                  FetchScenarioGraph(validationFlagsToMode(skipValidateAndResolve, skipNodeResults)),
+                  fetchState = true
+                )
+              )
+            }
+        }
+      } ~ path("processes") {
+        post {
+          entity(as[CreateScenarioCommand]) { createCommand =>
+            complete {
+              processService
+                .createProcess(createCommand)
+                // Currently, we throw error but when we switch to Tapir, we would probably handle such a request validation errors more type-safety
+                .map(_.valueOr(err => throw err))
+                .withListenerNotifySideEffect(response => OnSaved(response.id, response.versionId))
+                .map(response =>
+                  HttpResponse(
+                    status = StatusCodes.Created,
+                    entity = HttpEntity(ContentTypes.`application/json`, response.asJson.noSpaces)
+                  )
+                )
+            }
           }
         }
-      } ~ path("processes" / Segment / Segment) { (processName, category) =>
+        // TODO: This is the legacy API, it should be removed in 1.15
+      } ~ path("processes" / ProcessNameSegment / Segment) { (processName, category) =>
         authorize(user.can(category, Permission.Write)) {
           optionalHeaderValue(RemoteUserName.extractFromHeader) { remoteUserName =>
             canOverrideUsername(category, remoteUserName)(user) {
@@ -189,8 +220,10 @@ class ProcessesResources(
                   complete {
                     processService
                       .createProcess(
-                        CreateProcessCommand(ProcessName(processName), category, isFragment, remoteUserName)
+                        CreateScenarioCommand(processName, Some(category), None, None, isFragment, remoteUserName)
                       )
+                      // Currently, we throw error but when we switch to Tapir, we would probably handle such a request validation errors more type-safety
+                      .map(_.valueOr(err => throw err))
                       .withListenerNotifySideEffect(response => OnSaved(response.id, response.versionId))
                       .map(response =>
                         HttpResponse(
@@ -204,35 +237,23 @@ class ProcessesResources(
             }
           }
         }
-      } ~ path("processes" / Segment / "status") { processName =>
+      } ~ path("processes" / ProcessNameSegment / "status") { processName =>
         (get & processId(processName)) { processId =>
           complete {
             implicit val freshnessPolicy: DataFreshnessPolicy = DataFreshnessPolicy.Fresh
             deploymentService.getProcessState(processId).map(ToResponseMarshallable(_))
           }
         }
-      } ~ path("processes" / Segment / "toolbars") { processName =>
+      } ~ path("processes" / ProcessNameSegment / "toolbars") { processName =>
         (get & processId(processName)) { processId =>
           complete {
             processService
-              .getProcessWithDetails(processId, GetScenarioWithDetailsOptions.detailsOnly)
+              .getLatestProcessWithDetails(processId, GetScenarioWithDetailsOptions.detailsOnly)
               .map(_.toEntity)
-              .map(processToolbarService.getProcessToolbarSettings)
+              .map(processToolbarService.getScenarioToolbarSettings)
           }
         }
-      } ~ path("processes" / "category" / Segment / Segment) { (processName, category) =>
-        (post & processId(processName)) { processId =>
-          hasAdminPermission(user) {
-            complete {
-              processService
-                .updateCategory(processId, category)
-                .withListenerNotifySideEffect(response =>
-                  OnCategoryChanged(processId.id, response.oldCategory, response.newCategory)
-                )
-            }
-          }
-        }
-      } ~ path("processes" / Segment / VersionIdSegment / "compare" / VersionIdSegment) {
+      } ~ path("processes" / ProcessNameSegment / VersionIdSegment / "compare" / VersionIdSegment) {
         (processName, thisVersion, otherVersion) =>
           (get & processId(processName)) { processId =>
             complete {
@@ -247,7 +268,7 @@ class ProcessesResources(
                   otherVersion,
                   GetScenarioWithDetailsOptions.withsScenarioGraph
                 )
-              } yield ProcessComparator.compare(thisVersion.scenarioGraphUnsafe, otherVersion.scenarioGraphUnsafe)
+              } yield ScenarioGraphComparator.compare(thisVersion.scenarioGraphUnsafe, otherVersion.scenarioGraphUnsafe)
             }
           }
       }
@@ -284,6 +305,15 @@ class ProcessesResources(
 
   private def skipValidateAndResolveParameter = {
     parameters(Symbol("skipValidateAndResolve").as[Boolean].withDefault(false))
+  }
+
+  private def skipNodeResultsParameter = {
+    parameters(Symbol("skipNodeResults").as[Boolean].withDefault(false))
+  }
+
+  private def validationFlagsToMode(skipValidateAndResolve: Boolean, skipNodeResults: Boolean) = {
+    if (skipValidateAndResolve) FetchScenarioGraph.DontValidate
+    else FetchScenarioGraph.ValidateAndResolve(!skipNodeResults)
   }
 
 }

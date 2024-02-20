@@ -1,5 +1,5 @@
 import { useDispatch, useSelector } from "react-redux";
-import { getFetchedProcessDetails, getGraph, getProcessToDisplay } from "../reducers/selectors/graph";
+import { getGraph, getScenario, getScenarioGraph } from "../reducers/selectors/graph";
 import { isEmpty } from "lodash";
 import { getProcessDefinitionData } from "../reducers/selectors/settings";
 import { getCapabilities } from "../reducers/selectors/other";
@@ -14,20 +14,19 @@ import { ProcessGraph as GraphEl } from "../components/graph/ProcessGraph";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ProcessUtils from "../common/ProcessUtils";
 import { useWindows } from "../windowManager";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { parseWindowsQueryParams } from "../windowManager/useWindows";
-import NodeUtils from "../components/graph/NodeUtils";
-import { isEdgeEditable } from "../common/EdgeUtils";
+import { useSearchParams } from "react-router-dom";
 import * as VisualizationUrl from "../common/VisualizationUrl";
 import { Graph } from "../components/graph/Graph";
 import { ErrorHandler } from "./ErrorHandler";
-import { Process } from "../types";
 import { fetchVisualizationData } from "../actions/nk/fetchVisualizationData";
-import { fetchAndDisplayProcessCounts, clearProcess, loadProcessState } from "../actions/nk";
+import { clearProcess, fetchAndDisplayProcessCounts, loadProcessState, toggleSelection } from "../actions/nk";
 import { HTML5toTouch } from "rdndmb-html5-to-touch";
 import { DndProvider } from "react-dnd-multi-backend";
 import { useDecodedParams } from "../common/routerUtils";
 import { RootState } from "../reducers";
+import { useModalDetailsIfNeeded } from "./hooks/useModalDetailsIfNeeded";
+import { Scenario } from "../components/Process/types";
+import { useInterval } from "./Interval";
 
 function useUnmountCleanup() {
     const { close } = useWindows();
@@ -47,75 +46,35 @@ function useUnmountCleanup() {
     }, [cleanup]);
 }
 
-function useProcessState(time = 10000) {
+function useProcessState(refreshTime = 10000) {
     const dispatch = useDispatch();
-    const fetchedProcessDetails = useSelector(getFetchedProcessDetails);
-    const { isFragment, isArchived, id } = fetchedProcessDetails || {};
+    const scenario = useSelector(getScenario);
+    const { isFragment, isArchived, name } = scenario || {};
 
-    const fetch = useCallback(() => dispatch(loadProcessState(id)), [dispatch, id]);
+    const fetch = useCallback(() => dispatch(loadProcessState(name)), [dispatch, name]);
+    const disabled = !name || isFragment || isArchived;
 
-    useEffect(() => {
-        let processStateIntervalId;
-        if (id && !isFragment && !isArchived) {
-            processStateIntervalId = setInterval(fetch, time);
-        }
-        return () => {
-            clearInterval(processStateIntervalId);
-        };
-    }, [fetch, id, isArchived, isFragment, time]);
+    useInterval(fetch, { refreshTime, disabled });
 }
 
 function useCountsIfNeeded() {
     const dispatch = useDispatch();
-    const id = useSelector(getFetchedProcessDetails)?.id;
-    const processToDisplay = useSelector(getProcessToDisplay);
+    const name = useSelector(getScenario)?.name;
+    const scenarioGraph = useSelector(getScenarioGraph);
 
     const [searchParams] = useSearchParams();
     const from = searchParams.get("from");
     const to = searchParams.get("to");
     useEffect(() => {
         const countParams = VisualizationUrl.extractCountParams({ from, to });
-        if (id && countParams) {
-            dispatch(fetchAndDisplayProcessCounts(id, countParams.from, countParams.to, processToDisplay));
+        if (name && countParams) {
+            dispatch(fetchAndDisplayProcessCounts(name, countParams.from, countParams.to, scenarioGraph));
         }
-    }, [dispatch, from, id, to, processToDisplay]);
-}
-
-function useModalDetailsIfNeeded(getGraphInstance: () => Graph) {
-    const navigate = useNavigate();
-    const { openNodeWindow } = useWindows();
-    return useCallback(
-        (process: Process) => {
-            const params = parseWindowsQueryParams({ nodeId: [], edgeId: [] });
-
-            const edges = params.edgeId.map((id) => NodeUtils.getEdgeById(id, process)).filter(isEdgeEditable);
-            const nodes = params.nodeId
-                .concat(edges.map((e) => e.from))
-                .map((id) => NodeUtils.getNodeById(id, process) ?? (process.id === id && NodeUtils.getProcessProperties(process)))
-                .filter(Boolean);
-            const nodeIds = nodes.map((node) => node.id);
-            nodes.forEach((node) => openNodeWindow(node, process));
-
-            if (nodeIds.length) {
-                getGraphInstance()?.highlightNodes(nodeIds);
-            }
-
-            navigate(
-                {
-                    search: VisualizationUrl.setAndPreserveLocationParams({
-                        nodeId: nodeIds.map(encodeURIComponent),
-                        edgeId: [],
-                    }),
-                },
-                { replace: true },
-            );
-        },
-        [getGraphInstance, navigate, openNodeWindow],
-    );
+    }, [dispatch, from, name, to, scenarioGraph]);
 }
 
 function Visualization() {
-    const { id: processId } = useDecodedParams<{ id: string }>();
+    const { processName } = useDecodedParams<{ processName: string }>();
     const dispatch = useDispatch();
 
     const graphRef = useRef<Graph>();
@@ -131,12 +90,9 @@ function Visualization() {
         [dispatch],
     );
 
-    const { graphLoading } = useSelector(getGraph);
-    const fetchedProcessDetails = useSelector(getFetchedProcessDetails);
-    const graphNotReady = useMemo(
-        () => !dataResolved || isEmpty(fetchedProcessDetails) || graphLoading,
-        [dataResolved, fetchedProcessDetails, graphLoading],
-    );
+    const { scenarioLoading } = useSelector(getGraph);
+    const scenario = useSelector(getScenario);
+    const graphNotReady = useMemo(() => !dataResolved || isEmpty(scenario) || scenarioLoading, [dataResolved, scenario, scenarioLoading]);
 
     const processDefinitionData = useSelector(getProcessDefinitionData);
     const capabilities = useSelector(getCapabilities);
@@ -149,18 +105,25 @@ function Visualization() {
     }, [getGraphInstance]);
 
     useEffect(() => {
-        fetchData(processId);
-    }, [fetchData, processId]);
+        fetchData(processName);
+    }, [fetchData, processName]);
 
     useProcessState();
     useCountsIfNeeded();
 
-    const modalDetailsIfNeeded = useModalDetailsIfNeeded(getGraphInstance);
+    const { openNodes } = useModalDetailsIfNeeded();
+    const openAndHighlightNodes = useCallback(
+        async (scenario: Scenario) => {
+            const windows = await Promise.all(openNodes(scenario));
+            windows.map((w) => dispatch(toggleSelection(w.meta.node.id)));
+        },
+        [dispatch, openNodes],
+    );
+
     useEffect(() => {
-        if (!graphNotReady) {
-            modalDetailsIfNeeded(fetchedProcessDetails.json);
-        }
-    }, [fetchedProcessDetails, graphNotReady, modalDetailsIfNeeded]);
+        if (graphNotReady) return;
+        openAndHighlightNodes(scenario);
+    }, [scenario, graphNotReady, openAndHighlightNodes]);
 
     useUnmountCleanup();
     useRouteLeavingGuard(capabilities.editFrontend && !nothingToSave);

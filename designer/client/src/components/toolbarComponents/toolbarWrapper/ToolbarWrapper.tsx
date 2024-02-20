@@ -6,8 +6,8 @@ import ErrorBoundary from "../../common/ErrorBoundary";
 import { variables } from "../../../stylesheets/variables";
 import { useDragHandler } from "../../common/dndItems/DragHandle";
 import { CollapsiblePanelContent, Panel, PanelHeader } from "../Panel";
-import { IconWrapper, StyledCloseIcon, StyledCollapseIcon, Title } from "./ToolbarStyled";
-import { useTheme } from "@mui/material";
+import { IconWrapper, StyledCloseIcon, StyledCollapseIcon } from "./ToolbarStyled";
+import { Typography, useTheme } from "@mui/material";
 
 const { sidebarWidth } = variables;
 
@@ -41,9 +41,11 @@ export function ToolbarWrapper(props: ToolbarWrapperProps): React.JSX.Element | 
     }, [isCollapsible]);
 
     return children ? (
-        <Panel expanded={!isCollapsedLocal} color={color} width={sidebarWidth}>
+        <Panel className={"background"} expanded={!isCollapsedLocal} color={color} width={sidebarWidth}>
             <PanelHeader {...handlerProps} onClick={() => toggleCollapsed()} onKeyDown={(e) => e.key === "Enter" && toggleCollapsed()}>
-                <Title>{title}</Title>
+                <Typography textTransform={"uppercase"} variant={"overline"}>
+                    {title}
+                </Typography>
                 {isCollapsible && (
                     <IconWrapper>
                         <StyledCollapseIcon collapsed={isCollapsedLocal} />

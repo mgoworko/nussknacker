@@ -1,6 +1,6 @@
 import { Edge, EdgeKind, VariableTypes } from "../../../types";
 import { useSelector } from "react-redux";
-import { getProcessToDisplay } from "../../../reducers/selectors/graph";
+import { getScenarioGraph } from "../../../reducers/selectors/graph";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { NodeValue } from "./node";
 import { EdgeTypeOption, EdgeTypeSelect } from "./EdgeTypeSelect";
@@ -10,10 +10,10 @@ import { FieldsRow } from "./fragment-input-definition/FieldsRow";
 import NodeUtils from "../NodeUtils";
 import { uniq } from "lodash";
 import { ExpressionLang } from "./editors/expression/types";
-import { Validator } from "./editors/Validators";
 import { getProcessDefinitionData } from "../../../reducers/selectors/settings";
 import { useTranslation } from "react-i18next";
 import { SelectNodeWithFocus } from "../../withFocus";
+import { FieldError } from "./editors/Validators";
 
 interface Props {
     index: number;
@@ -23,13 +23,13 @@ interface Props {
     edges: Edge[];
     types?: EdgeTypeOption[];
     variableTypes?: VariableTypes;
-    validators?: Validator[];
+    fieldErrors: FieldError[];
 }
 
 export function EdgeFields(props: Props): JSX.Element {
     const { t } = useTranslation();
-    const { readOnly, value, index, onChange, edges, types, variableTypes, validators = [] } = props;
-    const process = useSelector(getProcessToDisplay);
+    const { readOnly, value, index, onChange, edges, types, variableTypes, fieldErrors } = props;
+    const scenarioGraph = useSelector(getScenarioGraph);
     const processDefinitionData = useSelector(getProcessDefinitionData);
 
     const [edge, setEdge] = useState(value);
@@ -39,8 +39,8 @@ export function EdgeFields(props: Props): JSX.Element {
     }, [edge, onChange]);
 
     //NOTE: fragment node preview is read only so we can ignore wrong "process" and nodes here.
-    const availableNodes = process.nodes.filter((n) => NodeUtils.hasInputs(n));
-    const otherEdges = useMemo(() => process.edges.filter((e) => e.from !== edge.from), [edge.from, process.edges]);
+    const availableNodes = scenarioGraph.nodes.filter((n) => NodeUtils.hasInputs(n));
+    const otherEdges = useMemo(() => scenarioGraph.edges.filter((e) => e.from !== edge.from), [edge.from, scenarioGraph.edges]);
     const targetNodes = useMemo(() => availableNodes.filter((n) => n.id === edge.to), [availableNodes, edge.to]);
     const freeNodes = useMemo(() => {
         return availableNodes.filter((n) => {
@@ -90,7 +90,7 @@ export function EdgeFields(props: Props): JSX.Element {
                     }}
                     readOnly={readOnly}
                     onValueChange={onValueChange}
-                    validators={validators}
+                    fieldErrors={fieldErrors}
                     showValidation
                 />
             );

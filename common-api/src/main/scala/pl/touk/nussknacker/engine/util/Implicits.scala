@@ -1,8 +1,11 @@
 package pl.touk.nussknacker.engine.util
 
+import cats.data.NonEmptyList
+
+import scala.annotation.tailrec
+import scala.collection.immutable.ListMap
 import scala.concurrent.{ExecutionContext, Future}
 import scala.language.higherKinds
-import scala.util.Using.Releasable
 import scala.util.{Failure, Success}
 
 object Implicits {
@@ -16,29 +19,28 @@ object Implicits {
 
   implicit class RichTupleList[K, V](seq: List[(K, V)]) {
 
-    def toGroupedMap: Map[K, List[V]] =
-      seq.groupBy(_._1).mapValuesNow(_.map(_._2))
+    def toGroupedMap: ListMap[K, List[V]] =
+      ListMap(
+        seq.orderedGroupBy(_._1).map { case (k, vList) =>
+          k -> vList.map(_._2)
+        }: _*
+      )
 
-  }
+    def toGroupedMapSafe: ListMap[K, NonEmptyList[V]] =
+      toGroupedMap.map { case (k, v) => k -> NonEmptyList.fromListUnsafe(v) }
 
-  implicit class RichMapIterable[K, V](m: Map[K, Iterable[V]]) {
-
-    def sequenceMap: Map[V, Iterable[K]] = {
-      m.map { case (k, values) =>
-        values.map(v => v -> k)
-      }.toList
-        .flatten
-        .groupBy(_._1)
-        .mapValuesNow(_.map(_._2))
+    def toMapCheckingDuplicates: Map[K, V] = {
+      val moreThanOneValueForKey = seq.toGroupedMap.filter(_._2.size > 1)
+      if (moreThanOneValueForKey.nonEmpty)
+        throw new IllegalStateException(
+          s"Found keys with more than one values: ${moreThanOneValueForKey.keys.mkString(", ")} during translating $seq to Map"
+        )
+      seq.toMap
     }
 
   }
 
   implicit class RichStringList(seq: List[String]) {
-
-    def sortCaseInsensitive: List[String] = {
-      seq.sortBy(_.toLowerCase)
-    }
 
     def mkCommaSeparatedStringWithPotentialEllipsis(maxEntries: Int): String = {
       if (seq.size <= maxEntries)
@@ -61,37 +63,24 @@ object Implicits {
 
   }
 
-  implicit class SafeString(s: String) {
+  implicit class RichIterable[T](list: List[T]) {
 
-    def safeValue: Option[String] = {
-      if (s == null || s == "") None else Some(s)
-    }
-
-  }
-
-  implicit class RichIterableMap[T](list: Iterable[Map[String, T]]) {
-
-    def reduceUnique: Map[String, T] = list.foldLeft(Map.empty[String, T]) { case (acc, element) =>
-      val duplicates = acc.keySet.intersect(element.keySet)
-      if (duplicates.isEmpty) {
-        acc ++ element
-      } else
-        throw new IllegalArgumentException(
-          s"Found duplicate keys: ${duplicates.mkString(", ")}, please correct configuration"
-        )
-    }
-
-  }
-
-  implicit object SourceIsReleasable extends Releasable[scala.io.Source] {
-    def release(resource: scala.io.Source): Unit = resource.close()
-  }
-
-  implicit class RichIterable[T](iterable: Iterable[T]) {
-
-    def exactlyOne: Option[T] = iterable match {
+    def exactlyOne: Option[T] = list match {
       case head :: Nil => Some(head)
       case _           => None
+    }
+
+    def orderedGroupBy[P](f: T => P): List[(P, List[T])] = {
+      @tailrec
+      def accumulator(seq: List[T], f: T => P, res: List[(P, List[T])]): List[(P, List[T])] = seq.headOption match {
+        case None => res.reverse
+        case Some(h) =>
+          val key                         = f(h)
+          val (withSameKey, withOtherKey) = seq.partition(f(_) == key)
+          accumulator(withOtherKey, f, (key -> withSameKey) :: res)
+      }
+
+      accumulator(list, f, Nil)
     }
 
   }

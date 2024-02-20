@@ -1,6 +1,7 @@
 /* eslint-disable i18next/no-literal-string */
 import { UnknownRecord, Instant } from "../../types/common";
-import { Process } from "../../types";
+import { ScenarioGraph, ValidationResult } from "../../types";
+import { ProcessingMode } from "../../http/HttpService";
 
 export enum ActionType {
     Deploy = "DEPLOY",
@@ -37,27 +38,31 @@ export type ProcessVersionType = {
     processVersionId: ProcessVersionId;
 };
 
-export interface ProcessType {
-    id: string;
+export interface Scenario {
     name: string;
-    processId: number;
     processVersionId: number;
     isArchived: boolean;
     isFragment: boolean;
     isLatestVersion: boolean;
     processCategory: string;
     processType: string;
-    modificationDate: Instant;
+    modificationDate: Instant; // Deprecated
     modifiedBy: string;
     createdAt: Instant;
+    modifiedAt: Instant;
     createdBy: string;
     lastAction?: ProcessActionType;
     lastDeployedAction?: ProcessActionType;
     state: ProcessStateType;
     history?: ProcessVersionType[];
-    json: Process;
+    scenarioGraph: ScenarioGraph;
+    validationResult: ValidationResult;
     processingType: string;
+    processingMode: ProcessingMode;
+    engineSetupName: string;
 }
+
+export type ProcessName = Scenario["name"];
 
 export type ProcessStateType = {
     status: StatusType;

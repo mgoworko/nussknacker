@@ -10,8 +10,8 @@ import pl.touk.nussknacker.engine.api.validation.ValidationMode
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.flink.test.RecordingExceptionConsumer
 import pl.touk.nussknacker.engine.kafka.source.InputMeta
-import pl.touk.nussknacker.engine.process.compiler.FlinkProcessCompiler
-import pl.touk.nussknacker.engine.process.registrar.FlinkProcessRegistrar
+import pl.touk.nussknacker.engine.process.helpers.TestResultsHolder
+import pl.touk.nussknacker.engine.schemedkafka.KafkaAvroPayloadIntegrationSpec.sinkForInputMetaResultsHolder
 import pl.touk.nussknacker.engine.schemedkafka.KafkaUniversalComponentTransformer._
 import pl.touk.nussknacker.engine.schemedkafka.helpers.KafkaAvroSpecMixin
 import pl.touk.nussknacker.engine.schemedkafka.schema._
@@ -28,13 +28,15 @@ import java.nio.charset.StandardCharsets
 
 class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndAfter {
 
-  import pl.touk.nussknacker.engine.kafka.KafkaTestUtils.richConsumer
   import KafkaAvroIntegrationMockSchemaRegistry._
+  import pl.touk.nussknacker.engine.kafka.KafkaTestUtils.richConsumer
   import spel.Implicits._
 
   import scala.jdk.CollectionConverters._
 
-  private lazy val creator: KafkaAvroTestProcessConfigCreator = new KafkaAvroTestProcessConfigCreator {
+  private lazy val creator: KafkaAvroTestProcessConfigCreator = new KafkaAvroTestProcessConfigCreator(
+    sinkForInputMetaResultsHolder
+  ) {
     override protected def schemaRegistryClientFactory: SchemaRegistryClientFactory =
       MockSchemaRegistryClientFactory.confluentBased(schemaRegistryMockClient)
   }
@@ -49,12 +51,11 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
 
   override protected def beforeAll(): Unit = {
     super.beforeAll()
-    val modelData = LocalModelData(config, creator)
-    registrar = FlinkProcessRegistrar(new FlinkProcessCompiler(modelData), executionConfigPreparerChain(modelData))
+    modelData = LocalModelData(config, List.empty, configCreator = creator)
   }
 
   before {
-    SinkForInputMeta.clear()
+    KafkaAvroPayloadIntegrationSpec.sinkForInputMetaResultsHolder.clear()
   }
 
   test("should read event in the same version as source requires and save it in the same version") {
@@ -63,10 +64,15 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val sinkParam   = UniversalSinkParam(topicConfig, ExistingSchemaVersion(1), "#input")
     val process     = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentV1.record, PaymentV1.record)
-
-    // Here process uses value-only source with metadata, the content of event's key is treated as a string.
-    verifyInputMeta(null, topicConfig.input, 0, 0L)
+    runAndVerifyResultSingleEvent(
+      process,
+      topicConfig,
+      PaymentV1.record,
+      PaymentV1.record, {
+        // Here process uses value-only source with metadata, the content of event's key is treated as a string.
+        verifyInputMeta(null, topicConfig.input, 0, 0L)
+      }
+    )
   }
 
   test("should read primitive event and save it in the same format") {
@@ -75,7 +81,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val sinkParam   = UniversalSinkParam(topicConfig, LatestSchemaVersion, "#input")
     val process     = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, "fooBar", "fooBar")
+    runAndVerifyResultSingleEvent(process, topicConfig, "fooBar", "fooBar")
   }
 
   test("should handle invalid expression type for topic") {
@@ -85,7 +91,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val process     = createAvroProcess(sourceParam, sinkParam, sourceTopicParamValue = _ => s"'invalid-topic'")
 
     intercept[Exception] {
-      runAndVerifyResult(process, topicConfig, "fooBar", "fooBar")
+      runAndVerifyResultSingleEvent(process, topicConfig, "fooBar", "fooBar")
     }.getMessage should include("InvalidPropertyFixedValue(Topic,None,'invalid-topic',")
   }
 
@@ -96,7 +102,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val process     = createAvroProcess(sourceParam, sinkParam, sourceTopicParamValue = _ => s"")
 
     intercept[Exception] {
-      runAndVerifyResult(process, topicConfig, "fooBar", "fooBar")
+      runAndVerifyResultSingleEvent(process, topicConfig, "fooBar", "fooBar")
     }.getMessage should include(
       "EmptyMandatoryParameter(This field is mandatory and can not be empty,Please fill field for this parameter,Topic,start"
     )
@@ -108,7 +114,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val sinkParam   = UniversalSinkParam(topicConfig, ExistingSchemaVersion(1), "#input")
     val process     = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentV2.record, PaymentV1.record)
+    runAndVerifyResultSingleEvent(process, topicConfig, PaymentV2.record, PaymentV1.record)
   }
 
   test("should read older compatible event then source requires and save it in newer compatible version") {
@@ -117,7 +123,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val sinkParam   = UniversalSinkParam(topicConfig, ExistingSchemaVersion(2), "#input")
     val process     = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentV1.record, PaymentV2.record)
+    runAndVerifyResultSingleEvent(process, topicConfig, PaymentV1.record, PaymentV2.record)
   }
 
   test("should read event in the same version as source requires and save it in newer compatible version") {
@@ -127,7 +133,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
       UniversalSinkParam(topicConfig, ExistingSchemaVersion(2), "#input", validationMode = Some(ValidationMode.lax))
     val process = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentV1.record, PaymentV2.record)
+    runAndVerifyResultSingleEvent(process, topicConfig, PaymentV1.record, PaymentV2.record)
   }
 
   test("should read older compatible event then source requires and save it in older compatible version") {
@@ -137,7 +143,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
       UniversalSinkParam(topicConfig, ExistingSchemaVersion(1), "#input", validationMode = Some(ValidationMode.lax))
     val process = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentV1.record, PaymentV1.record)
+    runAndVerifyResultSingleEvent(process, topicConfig, PaymentV1.record, PaymentV1.record)
   }
 
   test("should read older compatible event with source and save it in latest compatible version") {
@@ -146,7 +152,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val sinkParam   = UniversalSinkParam(topicConfig, LatestSchemaVersion, "#input")
     val process     = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentV1.record, PaymentV2.record)
+    runAndVerifyResultSingleEvent(process, topicConfig, PaymentV1.record, PaymentV2.record)
   }
 
   test("should read older compatible event then source requires, filter and save it in older compatible version") {
@@ -157,7 +163,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val filterParam = Some("#input.cnt == 0")
     val process     = createAvroProcess(sourceParam, sinkParam, filterParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentV1.record, PaymentV1.record)
+    runAndVerifyResultSingleEvent(process, topicConfig, PaymentV1.record, PaymentV1.record)
   }
 
   test("should read compatible events with source, filter and save only one") {
@@ -178,7 +184,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
       UniversalSinkParam(topicConfig, ExistingSchemaVersion(1), "#input", validationMode = Some(ValidationMode.lax))
     val process = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentNotCompatible.record, PaymentV1.record)
+    runAndVerifyResultSingleEvent(process, topicConfig, PaymentNotCompatible.record, PaymentV1.record)
   }
 
   test("should read older compatible event with source and save it in latest compatible version with map output") {
@@ -187,7 +193,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val sinkParam   = UniversalSinkParam(topicConfig, LatestSchemaVersion, PaymentV2.jsonMap)
     val process     = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentV1.record, PaymentV2.record)
+    runAndVerifyResultSingleEvent(process, topicConfig, PaymentV1.record, PaymentV2.record)
   }
 
   test("should read newer compatible event with source and save it in older compatible version with map output") {
@@ -196,7 +202,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val sinkParam   = UniversalSinkParam(topicConfig, ExistingSchemaVersion(1), PaymentV1.jsonMap)
     val process     = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentV2.record, PaymentV1.record)
+    runAndVerifyResultSingleEvent(process, topicConfig, PaymentV2.record, PaymentV1.record)
   }
 
   test("should rise exception when we provide wrong data map for #Avro helper output") {
@@ -206,7 +212,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val process     = createAvroProcess(sourceParam, sinkParam)
 
     assertThrowsWithParent[Exception] {
-      runAndVerifyResult(process, topicConfig, PaymentV2.record, PaymentV1.record)
+      runAndVerifyResultSingleEvent(process, topicConfig, PaymentV2.record, PaymentV1.record)
     }
   }
 
@@ -221,16 +227,25 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val events  = List(Address.encode(Address.exampleData + ("city" -> "Ochota")), Address.record)
     val process = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, events, Address.record)
+    runAndVerifyResult(
+      process,
+      topicConfig,
+      events,
+      Address.record, {
+        eventually {
+          RecordingExceptionConsumer.exceptionsFor(runId) should have size 1
+          val espExceptionInfo = RecordingExceptionConsumer.exceptionsFor(runId).head
 
-    RecordingExceptionConsumer.dataFor(runId) should have size 1
-    val espExceptionInfo = RecordingExceptionConsumer.dataFor(runId).head
-
-    espExceptionInfo.nodeComponentInfo shouldBe Some(NodeComponentInfo("end", "flinkKafkaAvroSink", ComponentType.Sink))
-    espExceptionInfo.throwable shouldBe a[NonTransientException]
-    val cause = espExceptionInfo.throwable.asInstanceOf[NonTransientException].cause
-    cause shouldBe a[AvroRuntimeException]
-    cause.getMessage should include("Not expected null for field: Some(street)")
+          espExceptionInfo.nodeComponentInfo shouldBe Some(
+            NodeComponentInfo("end", ComponentType.Sink, "flinkKafkaAvroSink")
+          )
+          espExceptionInfo.throwable shouldBe a[NonTransientException]
+          val cause = espExceptionInfo.throwable.asInstanceOf[NonTransientException].cause
+          cause shouldBe a[AvroRuntimeException]
+          cause.getMessage should include("Not expected null for field: Some(street)")
+        }
+      }
+    )
   }
 
   test("should throw exception when try to filter by missing field") {
@@ -255,9 +270,12 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
       process,
       topicConfig,
       List(PaymentV2.recordWithData, PaymentNotCompatible.recordWithData),
-      PaymentNotCompatible.recordWithData
+      PaymentNotCompatible.recordWithData, {
+        eventually {
+          RecordingExceptionConsumer.exceptionsFor(runId) should have size 1
+        }
+      }
     )
-    RecordingExceptionConsumer.dataFor(runId) should have size 1
   }
 
   test("should pass timestamp from flink to kafka") {
@@ -349,49 +367,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
       )
     )
 
-    runAndVerifyResult(process, topicConfig, PaymentDate.recordWithData, PaymentDate.record)
-  }
-
-  test("should accept logical types in specific record") {
-    val topicConfig = createAndRegisterTopicConfig(
-      "logical-fields-specific",
-      List(
-        GeneratedAvroClassWithLogicalTypesOldSchema.schema,
-        GeneratedAvroClassWithLogicalTypes.SCHEMA$,
-        GeneratedAvroClassWithLogicalTypesNewSchema.schema
-      )
-    )
-    val sourceParam = SourceAvroParam.forSpecificWithLogicalTypes(topicConfig)
-    val sinkParam   = UniversalSinkParam(topicConfig, ExistingSchemaVersion(2), "#input")
-
-    val givenRecord = GeneratedAvroClassWithLogicalTypesOldSchema(
-      PaymentDate.instant,
-      PaymentDate.date.toLocalDate,
-      PaymentDate.date.toLocalTime,
-      java.math.BigDecimal.valueOf(PaymentDate.decimal)
-    )
-
-    val expectedRecord = GeneratedAvroClassWithLogicalTypes
-      .newBuilder()
-      .setDateTime(PaymentDate.instant)
-      .setDate(PaymentDate.date.toLocalDate)
-      .setTime(PaymentDate.date.toLocalTime)
-      .setDecimal(java.math.BigDecimal.valueOf(PaymentDate.decimal))
-      .build()
-
-    val process = createAvroProcess(
-      sourceParam,
-      sinkParam,
-      Some(
-        s"#input.dateTime.toEpochMilli == ${PaymentDate.instant.toEpochMilli}L AND " +
-          s"#input.date.year == ${PaymentDate.date.getYear} AND #input.date.monthValue == ${PaymentDate.date.getMonthValue} AND #input.date.dayOfMonth == ${PaymentDate.date.getDayOfMonth} AND " +
-          s"#input.time.hour == ${PaymentDate.date.getHour} AND #input.time.minute == ${PaymentDate.date.getMinute} AND #input.time.second == ${PaymentDate.date.getSecond} AND " +
-          s"#input.getDecimal == ${PaymentDate.decimal} AND" +
-          s"#input.text.toString == '123'"
-      )
-    ) // default value
-
-    runAndVerifyResult(process, topicConfig, givenRecord, expectedRecord, useSpecificAvroReader = true)
+    runAndVerifyResultSingleEvent(process, topicConfig, PaymentDate.recordWithData, PaymentDate.record)
   }
 
   test("should define kafka key for output record") {
@@ -435,7 +411,7 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
     val filterParam = Some("#input.id.toLowerCase != 'we use here method that only String class has'")
     val process     = createAvroProcess(sourceParam, sinkParam, filterParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentV1.record, PaymentV1.record)
+    runAndVerifyResultSingleEvent(process, topicConfig, PaymentV1.record, PaymentV1.record)
   }
 
   test("should treat key as string when source has string-as-key deserialization") {
@@ -454,9 +430,8 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
 
     run(process) {
       consumeAndVerifyMessages(topicConfig.output, List(Product.record))
+      verifyInputMeta("""{"id":"lorem","field":"ipsum"}""", topicConfig.input, 0, 0L)
     }
-
-    verifyInputMeta("""{"id":"lorem","field":"ipsum"}""", topicConfig.input, 0, 0L)
   }
 
   test("should read key and value when source has key-value deserialization") {
@@ -477,20 +452,31 @@ class KafkaAvroPayloadIntegrationSpec extends KafkaAvroSpecMixin with BeforeAndA
 
     run(process) {
       consumeAndVerifyMessages(topicConfig.output, List(Product.record))
-    }
 
-    // Here process uses key-and-value deserialization in a source with metadata.
-    // The content of event's key is interpreted according to defined key schema.
-    verifyInputMeta(FullNameV1.record, topicConfig.input, 0, 0L)
+      // Here process uses key-and-value deserialization in a source with metadata.
+      // The content of event's key is interpreted according to defined key schema.
+      verifyInputMeta(FullNameV1.record, topicConfig.input, 0, 0L)
+    }
   }
 
   private def verifyInputMeta[T](key: T, topic: String, partition: Int, offset: Long): Assertion = {
     val expectedInputMeta =
       InputMeta[T](key, topic, partition, offset, 0L, TimestampType.CREATE_TIME, Map.empty[String, String].asJava, 0)
-    SinkForInputMeta.data should not be empty
-    val results = SinkForInputMeta.data.map(_.asInstanceOf[InputMeta[T]].copy(timestamp = 0L))
-    results should contain(expectedInputMeta)
+
+    eventually {
+      val results = KafkaAvroPayloadIntegrationSpec.sinkForInputMetaResultsHolder.results.map(
+        _.asInstanceOf[InputMeta[T]].copy(timestamp = 0L)
+      )
+      results should not be empty
+      results should contain(expectedInputMeta)
+    }
   }
+
+}
+
+object KafkaAvroPayloadIntegrationSpec extends Serializable {
+
+  private val sinkForInputMetaResultsHolder = new TestResultsHolder[InputMeta[_]]
 
 }
 

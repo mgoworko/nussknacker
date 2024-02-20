@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Field, { FieldType } from "./editors/field/Field";
-import { allValid, errorValidator, Validator } from "./editors/Validators";
-import { NodeType, NodeValidationError, ProcessDefinitionData } from "../../../types";
+import { FieldError, getValidationErrorsForField } from "./editors/Validators";
+import { ComponentDefinition, NodeType, NodeValidationError, ProcessDefinitionData } from "../../../types";
 import ProcessUtils from "../../../common/ProcessUtils";
 import { useDiffMark } from "./PathsToMark";
 import { useTranslation } from "react-i18next";
-import { NodeRow } from "./NodeDetailsContent/NodeStyled";
-import { NodeLabelStyled } from "./node";
+import { isEmpty } from "lodash";
+import { FormControl, FormLabel } from "@mui/material";
 
 type OutputFieldProps = {
     autoFocus?: boolean;
@@ -18,7 +18,7 @@ type OutputFieldProps = {
     renderedFieldLabel: JSX.Element;
     onChange: (value: string) => void;
     showValidation?: boolean;
-    validators?: Validator[];
+    fieldErrors: FieldError[];
 };
 
 function OutputField({
@@ -31,10 +31,11 @@ function OutputField({
     renderedFieldLabel,
     onChange,
     showValidation,
-    validators = [],
+    fieldErrors,
 }: OutputFieldProps): JSX.Element {
     const readOnly = !isEditMode || readonly;
-    const className = !showValidation || allValid(validators, [value]) ? "node-input" : "node-input node-input-with-error";
+
+    const className = !showValidation || isEmpty(fieldErrors) ? "node-input" : "node-input node-input-with-error";
     const [isMarked] = useDiffMark();
 
     return (
@@ -45,7 +46,7 @@ function OutputField({
             showValidation={showValidation}
             autoFocus={autoFocus}
             className={className}
-            validators={validators}
+            fieldErrors={fieldErrors}
             value={value}
             onChange={onChange}
         >
@@ -59,7 +60,7 @@ const outputVariablePath = "ref.outputVariableNames";
 export default function OutputParametersList({
     editedNode,
     processDefinitionData,
-    fieldErrors,
+    errors,
     isEditMode,
     showValidation,
     renderFieldLabel,
@@ -69,24 +70,24 @@ export default function OutputParametersList({
     processDefinitionData: ProcessDefinitionData;
     renderFieldLabel: (paramName: string) => JSX.Element;
     setProperty: <K extends keyof NodeType>(property: K, newValue: NodeType[K], defaultValue?: NodeType[K]) => void;
-    fieldErrors?: NodeValidationError[];
+    errors?: NodeValidationError[];
     showValidation?: boolean;
     isEditMode?: boolean;
 }): JSX.Element {
     const currentVariableNames = editedNode.ref?.outputVariableNames;
 
-    const typeDefinition = useMemo(
-        () => ProcessUtils.findNodeObjectTypeDefinition(editedNode, processDefinitionData.processDefinition),
-        [editedNode, processDefinitionData.processDefinition],
+    const componentDefinition: ComponentDefinition = useMemo(
+        () => ProcessUtils.extractComponentDefinition(editedNode, processDefinitionData.components),
+        [editedNode, processDefinitionData.components],
     );
-    const isDefinitionAvailable = !!typeDefinition.outputParameters && isEditMode;
+    const isDefinitionAvailable = !!componentDefinition?.outputParameters && isEditMode;
 
     const [variableNames, setVariableNames] = useState<Record<string, string>>(() => {
         if (!isDefinitionAvailable) {
             return currentVariableNames;
         }
 
-        const entries = typeDefinition.outputParameters.map((value) => [value, currentVariableNames?.[value]]);
+        const entries = componentDefinition.outputParameters.map((value) => [value, currentVariableNames?.[value]]);
         return Object.fromEntries(entries);
     });
 
@@ -100,7 +101,7 @@ export default function OutputParametersList({
     }, [variableNames, setProperty, isDefinitionAvailable]);
 
     useEffect(() => {
-        typeDefinition.outputParameters
+        componentDefinition?.outputParameters
             ?.filter((paramName) => variableNames[paramName] === undefined)
             .forEach((paramName) => {
                 setVariableNames((prevState) => ({
@@ -108,7 +109,7 @@ export default function OutputParametersList({
                     [paramName]: paramName,
                 }));
             });
-    }, [typeDefinition.outputParameters, variableNames]);
+    }, [componentDefinition?.outputParameters, variableNames]);
 
     const entries = Object.entries(variableNames);
 
@@ -117,10 +118,10 @@ export default function OutputParametersList({
     }
 
     return (
-        <NodeRow key="outputVariableNames">
-            <NodeLabelStyled title={t("parameterOutputs.outputsTitle", "Fragment outputs names")}>
+        <FormControl key="outputVariableNames">
+            <FormLabel title={t("parameterOutputs.outputsTitle", "Fragment outputs names")}>
                 {t("parameterOutputs.outputsText", "Outputs names:")}
-            </NodeLabelStyled>
+            </FormLabel>
             <div className="node-value">
                 <div className="fieldsControl">
                     {entries.map(([name, value]) => (
@@ -138,11 +139,11 @@ export default function OutputParametersList({
                             }
                             fieldType={FieldType.input}
                             fieldProperty={name}
-                            validators={[errorValidator(fieldErrors || [], `${outputVariablePath}.${name}`)]}
+                            fieldErrors={getValidationErrorsForField(errors, `${outputVariablePath}.${name}`)}
                         />
                     ))}
                 </div>
             </div>
-        </NodeRow>
+        </FormControl>
     );
 }

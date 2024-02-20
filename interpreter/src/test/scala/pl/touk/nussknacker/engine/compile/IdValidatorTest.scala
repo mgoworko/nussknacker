@@ -7,6 +7,7 @@ import org.scalatest.prop.TableDrivenPropertyChecks.{Table, forAll}
 import org.scalatest.prop.TableFor2
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError._
+import pl.touk.nussknacker.engine.api.process.ProcessName
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 
@@ -16,7 +17,7 @@ class IdValidatorTest extends AnyFunSuite with Matchers {
     forAll(IdValidationTestData.scenarioIdErrorCases) {
       (scenarioId: String, expectedErrors: List[ProcessCompilationError]) =>
         {
-          IdValidator.validate(validScenario(scenarioId)) match {
+          IdValidator.validate(validScenario(scenarioId), isFragment = false) match {
             case Validated.Invalid(errors) =>
               errors.toList shouldBe expectedErrors
             case Validated.Valid(_) =>
@@ -30,7 +31,7 @@ class IdValidatorTest extends AnyFunSuite with Matchers {
     forAll(IdValidationTestData.fragmentIdErrorCases) {
       (scenarioId: String, expectedErrors: List[ProcessCompilationError]) =>
         {
-          IdValidator.validate(validFragment(scenarioId)) match {
+          IdValidator.validate(validFragment(scenarioId), isFragment = true) match {
             case Validated.Invalid(errors) =>
               errors.toList shouldBe expectedErrors
             case Validated.Valid(_) =>
@@ -43,7 +44,7 @@ class IdValidatorTest extends AnyFunSuite with Matchers {
   test("should handle all cases of node id validation") {
     forAll(IdValidationTestData.nodeIdErrorCases) { (nodeId: String, expectedErrors: List[ProcessCompilationError]) =>
       {
-        IdValidator.validate(validScenario(nodeId = nodeId)) match {
+        IdValidator.validate(validScenario(nodeId = nodeId), isFragment = true) match {
           case Validated.Invalid(errors) =>
             errors.toList shouldBe expectedErrors
           case Validated.Valid(_) =>
@@ -55,10 +56,10 @@ class IdValidatorTest extends AnyFunSuite with Matchers {
 
   test("should validate both scenario and node id") {
     val scenarioWithEmptyIds = validScenario("", "")
-    IdValidator.validate(scenarioWithEmptyIds) match {
+    IdValidator.validate(scenarioWithEmptyIds, isFragment = false) match {
       case Validated.Invalid(errors) =>
         errors.toList should contain theSameElementsAs List(
-          ScenarioIdError(EmptyValue, "", isFragment = false),
+          ScenarioNameError(EmptyValue, ProcessName(""), isFragment = false),
           NodeIdValidationError(EmptyValue, "")
         )
       case Validated.Valid(_) =>
@@ -102,15 +103,15 @@ object IdValidationTestData {
     Table(
       ("scenarioId", "errors"),
       ("validId", List.empty),
-      ("", List(ScenarioIdError(EmptyValue, "", forFragment))),
-      (" ", List(ScenarioIdError(BlankId, " ", forFragment))),
-      ("trailingSpace ", List(ScenarioIdError(TrailingSpacesId, "trailingSpace ", forFragment))),
-      (" leadingSpace", List(ScenarioIdError(LeadingSpacesId, " leadingSpace", forFragment))),
+      ("", List(ScenarioNameError(EmptyValue, ProcessName(""), forFragment))),
+      (" ", List(ScenarioNameError(BlankId, ProcessName(" "), forFragment))),
+      ("trailingSpace ", List(ScenarioNameError(TrailingSpacesId, ProcessName("trailingSpace "), forFragment))),
+      (" leadingSpace", List(ScenarioNameError(LeadingSpacesId, ProcessName(" leadingSpace"), forFragment))),
       (
         " leadingAndTrailingSpace ",
         List(
-          ScenarioIdError(LeadingSpacesId, " leadingAndTrailingSpace ", forFragment),
-          ScenarioIdError(TrailingSpacesId, " leadingAndTrailingSpace ", forFragment)
+          ScenarioNameError(LeadingSpacesId, ProcessName(" leadingAndTrailingSpace "), forFragment),
+          ScenarioNameError(TrailingSpacesId, ProcessName(" leadingAndTrailingSpace "), forFragment)
         )
       ),
     )

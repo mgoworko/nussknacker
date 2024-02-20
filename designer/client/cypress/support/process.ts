@@ -143,10 +143,10 @@ function importTestProcess(name: string, fixture = "testProcess") {
             };
             return cy.postFormData(`/api/processes/import/${name}`, auth, formData);
         })
-        .then((process) => {
+        .then((response) => {
             cy.request("PUT", `/api/processes/${name}`, {
                 comment: "import test data",
-                process,
+                scenarioGraph: response.scenarioGraph,
             });
             return cy.wrap(name);
         });
@@ -156,12 +156,12 @@ function getTestProcesses(filter?: string) {
     const url = `/api/processes`;
     return cy
         .request({ url })
-        .then(({ body }) => body.filter(({ id }) => id.includes(filter || Cypress.env("processName"))).map(({ id }) => id));
+        .then(({ body }) => body.filter(({ name }) => name.includes(filter || Cypress.env("processName"))).map(({ name }) => name));
 }
 
 function deleteAllTestProcesses({ filter, force }: { filter?: string; force?: boolean }) {
-    return cy.getTestProcesses(filter).each((id: string) => {
-        cy.deleteTestProcess(id, force);
+    return cy.getTestProcesses(filter).each((name: string) => {
+        cy.deleteTestProcess(name, force);
     });
 }
 

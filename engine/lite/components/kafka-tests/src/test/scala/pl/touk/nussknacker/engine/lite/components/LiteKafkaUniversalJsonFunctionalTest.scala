@@ -1,19 +1,21 @@
 package pl.touk.nussknacker.engine.lite.components
 
-import cats.data.Validated.Invalid
-import cats.data.{NonEmptyList, Validated}
+import cats.data.Validated.{Invalid, Valid, invalidNel}
+import cats.data.{NonEmptyList, Validated, ValidatedNel}
 import io.circe.Json
-import io.circe.Json.{Null, fromInt, fromLong, fromString, obj}
+import io.circe.Json.{Null, fromFields, fromInt, fromJsonObject, fromLong, fromString, obj}
 import org.apache.kafka.clients.producer.ProducerRecord
-import org.everit.json.schema.{Schema => EveritSchema}
-import org.scalatest.Inside
+import org.everit.json.schema.{ObjectSchema, Schema => EveritSchema, StringSchema}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.prop.TableDrivenPropertyChecks
+import org.scalatest.{Assertion, Inside}
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
 import pl.touk.nussknacker.engine.api.CirceUtil
+import pl.touk.nussknacker.engine.api.context.ProcessCompilationError
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.{
   CustomNodeError,
+  EmptyMandatoryParameter,
   ExpressionParserCompilationError
 }
 import pl.touk.nussknacker.engine.api.validation.ValidationMode
@@ -66,7 +68,7 @@ class LiteKafkaUniversalJsonFunctionalTest
       ),
     )
 
-    forAll(testData) { (config: ScenarioConfig, expected: Validated[_, RunResult[_]]) =>
+    forAll(testData) { (config: ScenarioConfig, expected: Validated[_, RunResult]) =>
       val results = runWithValueResults(config)
       results shouldBe expected
     }
@@ -107,7 +109,7 @@ class LiteKafkaUniversalJsonFunctionalTest
       (config(sampleJStr, schemaString, schemaBigDecimal, sampleLong), valid(sampleJBigDecimalFromLong)),
     )
 
-    forAll(testData) { (config: ScenarioConfig, expected: Validated[_, RunResult[_]]) =>
+    forAll(testData) { (config: ScenarioConfig, expected: Validated[_, RunResult]) =>
       val results = runWithValueResults(config)
       results shouldBe expected
     }
@@ -150,7 +152,7 @@ class LiteKafkaUniversalJsonFunctionalTest
       ),
     )
 
-    forAll(testData) { (config: ScenarioConfig, expected: Validated[_, RunResult[_]]) =>
+    forAll(testData) { (config: ScenarioConfig, expected: Validated[_, RunResult]) =>
       val results = runWithValueResults(config)
       results shouldBe expected
     }
@@ -168,21 +170,21 @@ class LiteKafkaUniversalJsonFunctionalTest
       (sampleMapAny,      schemaMapAny,                  schemaMapStr,                         strict,             invalidTypes("path 'value' actual: 'Unknown' expected: 'String'")),
       (sampleMapStr,      schemaMapAny,                  schemaMapStr,                         lax,                valid(sampleMapStr)),
       (sampleMapStr,      schemaMapStr,                  schemaMapStr,                         strictAndLax,       valid(sampleMapStr)),
-      (sampleMapStr,      schemaMapStringOrLong,         schemaMapStr,                         strict,             invalidTypes("path 'value' actual: 'String | Long' expected: 'String'")),
+      (sampleMapStr,      schemaMapStringOrLong,         schemaMapStr,                         strict,             invalidTypes("path 'value' actual: 'Long | String' expected: 'String'")),
       (sampleMapStr,      schemaMapStringOrLong,         schemaMapStr,                         lax,                valid(sampleMapStr)),
       (sampleMapPerson,   schemaMapObjPerson,            schemaMapStr,                         strictAndLax,       invalidTypes("path 'value' actual: 'Record{age: Long, first: String, last: String}' expected: 'String'")),
       (sampleMapPerson,   schemaMapObjPersonWithLimits,  schemaMapStr,                         strictAndLax,       invalidTypes("path 'value' actual: 'Record{age: Integer, first: String, last: String}' expected: 'String'")),
       (sampleArrayInt,    schemaArrayLong,               schemaMapStr,                         strictAndLax,       invalidTypes("actual: 'List[Long]' expected: 'Map[String, String]'")),
       (samplePerson,      schemaPerson,                  schemaMapStr,                         strictAndLax,       invalidTypes("path 'age' actual: 'Long' expected: 'String'")),
       (samplePerson,      schemaPersonWithLimits,        schemaMapStr,                         strictAndLax,       invalidTypes("path 'age' actual: 'Integer' expected: 'String'")),
-      (sampleMapAny,      schemaMapAny,                  schemaMapStringOrLong,                strict,             invalidTypes("path 'value' actual: 'Unknown' expected: 'String | Long'")),
+      (sampleMapAny,      schemaMapAny,                  schemaMapStringOrLong,                strict,             invalidTypes("path 'value' actual: 'Unknown' expected: 'Long | String'")),
       (sampleMapInt,      schemaMapAny,                  schemaMapStringOrLong,                lax,                valid(sampleMapInt)),
       (sampleMapStr,      schemaMapStr,                  schemaMapStringOrLong,                strictAndLax,       valid(sampleMapStr)),
       (sampleMapStr,      schemaMapStringOrLong,         schemaMapStringOrLong,                strictAndLax,       valid(sampleMapStr)),
       (sampleMapInt,      schemaMapStringOrLong,         schemaMapStringOrLong,                strictAndLax,       valid(sampleMapInt)),
-      (samplePerson,      schemaMapObjPerson,            schemaMapStringOrLong,                strictAndLax,       invalidTypes("path 'value' actual: 'Record{age: Long, first: String, last: String}' expected: 'String | Long'")),
-      (samplePerson,      schemaMapObjPersonWithLimits,  schemaMapStringOrLong,                strictAndLax,       invalidTypes("path 'value' actual: 'Record{age: Integer, first: String, last: String}' expected: 'String | Long'")),
-      (sampleArrayInt,    schemaArrayLong,               schemaMapStringOrLong,                strictAndLax,       invalidTypes("actual: 'List[Long]' expected: 'Map[String, String | Long]'")),
+      (samplePerson,      schemaMapObjPerson,            schemaMapStringOrLong,                strictAndLax,       invalidTypes("path 'value' actual: 'Record{age: Long, first: String, last: String}' expected: 'Long | String'")),
+      (samplePerson,      schemaMapObjPersonWithLimits,  schemaMapStringOrLong,                strictAndLax,       invalidTypes("path 'value' actual: 'Record{age: Integer, first: String, last: String}' expected: 'Long | String'")),
+      (sampleArrayInt,    schemaArrayLong,               schemaMapStringOrLong,                strictAndLax,       invalidTypes("actual: 'List[Long]' expected: 'Map[String, Long | String]'")),
       (samplePerson,      schemaPerson,                  schemaMapStringOrLong,                strictAndLax,       valid(samplePerson)),
       (samplePerson,      schemaPerson,                  nameAndLastNameSchema,                strictAndLax,       valid(samplePerson)),
       (samplePerson,      schemaPerson,                  nameAndLastNameSchema(schemaLong),    strictAndLax,       valid(samplePerson)),
@@ -197,7 +199,7 @@ class LiteKafkaUniversalJsonFunctionalTest
           sourceSchema: EveritSchema,
           sinkSchema: EveritSchema,
           validationModes: List[ValidationMode],
-          expected: Validated[_, RunResult[_]]
+          expected: Validated[_, RunResult]
       ) =>
         validationModes.foreach { mode =>
           val cfg     = config(input, sourceSchema, sinkSchema, output = Input, Some(mode))
@@ -224,7 +226,7 @@ class LiteKafkaUniversalJsonFunctionalTest
           sourceSchema: EveritSchema,
           sinkSchema: EveritSchema,
           validationModes: List[ValidationMode],
-          expected: Validated[_, RunResult[_]]
+          expected: Validated[_, RunResult]
       ) =>
         validationModes.foreach { mode =>
           val cfg     = config(input, sourceSchema, sinkSchema, output = input, Some(mode))
@@ -250,9 +252,9 @@ class LiteKafkaUniversalJsonFunctionalTest
       (A,         schemaString,             schemaEnumABC,         strictAndLax,       valid(A)),
       (A,         schemaEnumABC,            schemaString,          strictAndLax,       valid(A)),
       (A,         schemaEnumABC,            schemaEnumAB1,         lax,                valid(A)),
-      (A,         schemaEnumABC,            schemaEnumAB1,         strict,             invalidTypes("actual: 'String(A) | String(B) | String(C)' expected: 'String(A) | Integer(1) | String(B)'")),
+      (A,         schemaEnumABC,            schemaEnumAB1,         strict,             invalidTypes("actual: 'String(A) | String(B) | String(C)' expected: 'Integer(1) | String(A) | String(B)'")),
       (A,         schemaEnumAB1,            schemaEnumAB,          lax,                valid(A)),
-      (A,         schemaEnumAB1,            schemaEnumAB,          strict,             invalidTypes("actual: 'String(A) | Integer(1) | String(B)' expected: 'String(A) | String(B)'")),
+      (A,         schemaEnumAB1,            schemaEnumAB,          strict,             invalidTypes("actual: 'Integer(1) | String(A) | String(B)' expected: 'String(A) | String(B)'")),
       (A,         schemaEnumAB1,            schemaEnumAB1,         strictAndLax,       valid(A)),
       (one,       schemaEnumAB1,            schemaEnumAB1,         strictAndLax,       valid(one)),
       (obj,       schemaEnumStrOrObj,       schemaEnumStrOrObj,    lax,                valid(obj)),
@@ -266,7 +268,7 @@ class LiteKafkaUniversalJsonFunctionalTest
           sourceSchema: EveritSchema,
           sinkSchema: EveritSchema,
           validationModes: List[ValidationMode],
-          expected: Validated[_, RunResult[_]]
+          expected: Validated[_, RunResult]
       ) =>
         validationModes.foreach { mode =>
           val cfg     = config(input, sourceSchema, sinkSchema, output = Input, Some(mode))
@@ -317,7 +319,7 @@ class LiteKafkaUniversalJsonFunctionalTest
       (inputObject,                  objWithPatternPropsAndStringAdditionalSchema,         objWithPatternPropsAndStringAdditionalSchema,   Input,                                        strict,               invalidTypes("actual: 'Map[String,Long | String]' expected: 'Map[String, String]'")),
       (inputObject,                  objWithPatternPropsAndStringAdditionalSchema,         schemaLong,                                     SpecialSpELElement("#input['foo_int']"),      lax,                  valid(inputObjectIntPropValue)),
       (inputObject,                  objWithPatternPropsAndStringAdditionalSchema,         schemaLong,                                     SpecialSpELElement("#input['foo_int']"),      strict,               invalidTypes("actual: 'Long | String' expected: 'Long'")),
-      (inputObject,                  objWithDefinedPropsPatternPropsAndAdditionalSchema,   schemaLong,                                     SpecialSpELElement("#input['foo_int']"),      lax,                  Invalid(NonEmptyList(ExpressionParserCompilationError("Dynamic property access is not allowed", "my-sink", Some("Value"), "#input['foo_int']"), Nil))),
+      (inputObject,                  objWithDefinedPropsPatternPropsAndAdditionalSchema,   schemaLong,                                     SpecialSpELElement("#input['foo_int']"),      lax,                  invalidNel(ExpressionParserCompilationError("There is no property 'foo_int' in type: Record{definedProp: String}", "my-sink", Some("Value"), "#input['foo_int']"))),
       (inputObjectWithDefinedProp,   objWithDefinedPropsPatternPropsAndAdditionalSchema,   schemaString,                                   SpecialSpELElement("#input.definedProp"),     strict,               valid(inputObjectDefinedPropValue)),
     )
     //@formatter:on
@@ -329,7 +331,7 @@ class LiteKafkaUniversalJsonFunctionalTest
           sinkSchema: EveritSchema,
           sinkExpression: SpecialSpELElement,
           validationModes: List[ValidationMode],
-          expected: Validated[_, RunResult[_]]
+          expected: Validated[_, RunResult]
       ) =>
         validationModes.foreach { mode =>
           val cfg     = config(input, sourceSchema, sinkSchema, output = sinkExpression, Some(mode))
@@ -340,25 +342,6 @@ class LiteKafkaUniversalJsonFunctionalTest
   }
 
   test("pattern properties validations should work in editor mode") {
-    def scenario(config: ScenarioConfig, fieldsExpressions: Map[String, String]): CanonicalProcess = {
-      val sinkParams = (Map(
-        TopicParamName         -> s"'${config.sinkTopic}'",
-        SchemaVersionParamName -> s"'${SchemaVersionOption.LatestOptionName}'",
-        SinkKeyParamName       -> "",
-        SinkRawEditorParamName -> "false",
-      ) ++ fieldsExpressions).mapValuesNow(Expression.spel)
-
-      ScenarioBuilder
-        .streamingLite("check json validation")
-        .source(
-          sourceName,
-          KafkaUniversalName,
-          TopicParamName         -> s"'${config.sourceTopic}'",
-          SchemaVersionParamName -> s"'${SchemaVersionOption.LatestOptionName}'"
-        )
-        .emptySink(sinkName, KafkaUniversalName, sinkParams.toList: _*)
-    }
-
     def invalidTypeInEditorMode(fieldName: String, error: String): Invalid[NonEmptyList[CustomNodeError]] = {
       val finalMessage = OutputValidatorErrorsMessageFormatter.makeMessage(List(error), Nil, Nil, Nil)
       Invalid(NonEmptyList.one(CustomNodeError(sinkName, finalMessage, Some(fieldName))))
@@ -407,20 +390,170 @@ class LiteKafkaUniversalJsonFunctionalTest
       ),
     )
 
-    forAll(testData) {
-      (sinkSchema: EveritSchema, sinkFields: Map[String, String], expected: Validated[_, RunResult[_]]) =>
-        val dummyInputObject               = obj()
-        val cfg                            = config(dummyInputObject, schemaMapAny, sinkSchema)
-        val jsonScenario: CanonicalProcess = scenario(cfg, sinkFields)
-        runner.registerJsonSchema(cfg.sourceTopic, cfg.sourceSchema)
-        runner.registerJsonSchema(cfg.sinkTopic, cfg.sinkSchema)
+    forAll(testData) { (sinkSchema: EveritSchema, sinkFields: Map[String, String], expected: Validated[_, RunResult]) =>
+      val dummyInputObject = obj()
+      val cfg              = config(dummyInputObject, schemaMapAny, sinkSchema)
+      val jsonScenario     = createEditorModeScenario(cfg, sinkFields)
+      runner.registerJsonSchema(cfg.sourceTopic, cfg.sourceSchema)
+      runner.registerJsonSchema(cfg.sinkTopic, cfg.sinkSchema)
 
-        val input = KafkaConsumerRecord[String, String](cfg.sourceTopic, cfg.inputData.toString())
-        val results = runner
-          .runWithStringData(jsonScenario, List(input))
-          .map(_.mapSuccesses(r => CirceUtil.decodeJsonUnsafe[Json](r.value(), "invalid json string")))
-        results shouldBe expected
+      val input = KafkaConsumerRecord[String, String](cfg.sourceTopic, cfg.inputData.toString())
+      val results = runner
+        .runWithStringData(jsonScenario, List(input))
+        .map(_.mapSuccesses(r => CirceUtil.decodeJsonUnsafe[Json](r.value(), "invalid json string")))
+      results shouldBe expected
     }
+  }
+
+  test("various combinations of optional-like fields with sink in editor mode") {
+    def expectValidObject(expectedObject: Map[String, Json])(
+        result: ValidatedNel[ProcessCompilationError, Map[String, Json]]
+    ): Assertion =
+      result shouldBe Valid(expectedObject)
+    def expectedMissingValue(result: ValidatedNel[ProcessCompilationError, Map[String, Json]]): Assertion =
+      result.invalidValue should matchPattern {
+        case NonEmptyList(EmptyMandatoryParameter(_, _, `ObjectFieldName`, `sinkName`), Nil) =>
+      }
+    forAll(
+      Table[EveritSchema, String, ValidatedNel[ProcessCompilationError, Map[String, Json]] => Assertion](
+        ("outputSchema", "fieldExpression", "expectationCheckingFun"),
+        (createObjSchema(required = false, schemaString), "", expectValidObject(Map.empty)),
+        (createObjSchema(required = true, schemaString, schemaNull), "", expectedMissingValue),
+        (
+          createObjSchema(required = true, schemaString, schemaNull),
+          "null",
+          expectValidObject(Map(ObjectFieldName -> Json.Null))
+        ),
+        (
+          createObjSchema(required = false, schemaString, schemaNull),
+          "",
+          // We don't want user to decide if he/she want a null or to remove field, so we make a choice for him/her
+          expectValidObject(Map(ObjectFieldName -> Json.Null))
+        ),
+        (
+          createObjSchema(required = false, schemaString, schemaNull),
+          // This case is treated the same by Nussknacker - empty expression is just an expression that always returns null
+          "null",
+          expectValidObject(Map(ObjectFieldName -> Json.Null))
+        )
+      )
+    ) { (outputSchema, fieldExpression, expectationCheckingFun) =>
+      val dummyInputObject = obj()
+      val cfg              = config(dummyInputObject, schemaMapAny, outputSchema)
+      val jsonScenario     = createEditorModeScenario(cfg, Map(ObjectFieldName -> fieldExpression))
+      runner.registerJsonSchema(cfg.sourceTopic, cfg.sourceSchema)
+      runner.registerJsonSchema(cfg.sinkTopic, cfg.sinkSchema)
+      val input = KafkaConsumerRecord[String, String](cfg.sourceTopic, cfg.inputData.toString())
+
+      val validatedResults = runner.runWithStringData(jsonScenario, List(input))
+
+      val validatedDecodedResult = validatedResults.map { result =>
+        result.errors shouldBe empty
+        result.successes should have size 1
+        CirceUtil.decodeJsonUnsafe[Map[String, Json]](result.successes.head.value())
+      }
+      expectationCheckingFun(validatedDecodedResult)
+    }
+  }
+
+  test("schema evolution on output") {
+    forAll(
+      Table(
+        ("inputSchema", "outputSchema", "inputRecord", "expectedOutputRecord"),
+        (
+          createObjSchema(required = true, schemaString, schemaNull),
+          createObjSchema(required = false, schemaString),
+          fromFields(List(ObjectFieldName -> Json.Null)),
+          fromFields(List.empty)
+        ),
+        (
+          createObjSchema(required = true, schemaString, schemaNull),
+          createObjSchema(required = false, schemaString, schemaNull),
+          fromFields(List(ObjectFieldName -> Json.Null)),
+          fromFields(List(ObjectFieldName -> Json.Null))
+        ),
+        (
+          createObjSchema(required = false, schemaString),
+          createObjSchema(required = true, schemaString, schemaNull),
+          fromFields(List.empty),
+          fromFields(List(ObjectFieldName -> Json.Null))
+        ),
+        // schema evolution on input - it is done by external mechanism
+        (
+          createObjSchema(required = false, StringSchema.builder().defaultValue("foo").build()),
+          createObjSchema(required = true, schemaString),
+          fromFields(List.empty),
+          fromFields(List(ObjectFieldName -> fromString("foo")))
+        ),
+        // schema evolution on output - it is done by Nussknacker's code - see BestEffortJsonSchemaEncoder
+        (
+          createObjSchema(required = true, schemaString, schemaNull),
+          createObjSchema(required = true, StringSchema.builder().defaultValue("foo").build()),
+          fromFields(List(ObjectFieldName -> Json.Null)),
+          fromFields(List(ObjectFieldName -> fromString("foo")))
+        ),
+        (
+          createObjSchema(required = false, schemaString),
+          createObjSchema(required = true, StringSchema.builder().defaultValue("foo").build()),
+          fromFields(List.empty),
+          fromFields(List(ObjectFieldName -> fromString("foo")))
+        )
+      )
+    ) { (inputSchema, outputSchema, inputRecord, expectedOutputRecord) =>
+      val result = runWithValueResults(config(inputRecord, inputSchema, outputSchema)).validValue
+      result.errors shouldBe empty
+      result.successes should have size 1
+      result.successes.head shouldBe expectedOutputRecord
+    }
+  }
+
+  test("schema evolution on output - redundant fields") {
+    val secondsField = ObjectFieldName + "2"
+    val twoFieldsSchema = ObjectSchema.builder
+      .addPropertySchema(ObjectFieldName, schemaString)
+      .addPropertySchema(secondsField, schemaString)
+      .additionalProperties(false)
+      .build()
+
+    val strictConfig = config(
+      inputData = fromFields(List(ObjectFieldName -> fromString("foo"), secondsField -> fromString("bar"))),
+      sourceSchema = twoFieldsSchema,
+      sinkSchema = createObjSchema(schemaString),
+      validationMode = Some(ValidationMode.strict)
+    )
+    val strictValidationErrors = runWithValueResults(strictConfig).invalidValue
+    strictValidationErrors should matchPattern {
+      case NonEmptyList(CustomNodeError(`sinkName`, message, _), Nil)
+          if message.contains(s"Redundant fields: $secondsField") =>
+    }
+
+    val laxConfig = strictConfig.copy(validationMode = Some(ValidationMode.lax))
+    val laxResult = runWithValueResults(laxConfig).validValue
+    laxResult.errors shouldBe empty
+    laxResult.successes should have size 1
+    laxResult.successes.head shouldBe fromFields(List(ObjectFieldName -> fromString("foo")))
+  }
+
+  private def createEditorModeScenario(
+      config: ScenarioConfig,
+      fieldsExpressions: Map[String, String]
+  ): CanonicalProcess = {
+    val sinkParams = (Map(
+      TopicParamName         -> s"'${config.sinkTopic}'",
+      SchemaVersionParamName -> s"'${SchemaVersionOption.LatestOptionName}'",
+      SinkKeyParamName       -> "",
+      SinkRawEditorParamName -> "false",
+    ) ++ fieldsExpressions).mapValuesNow(Expression.spel)
+
+    ScenarioBuilder
+      .streamingLite("check json validation")
+      .source(
+        sourceName,
+        KafkaUniversalName,
+        TopicParamName         -> s"'${config.sourceTopic}'",
+        SchemaVersionParamName -> s"'${SchemaVersionOption.LatestOptionName}'"
+      )
+      .emptySink(sinkName, KafkaUniversalName, sinkParams.toList: _*)
   }
 
   test("should catch runtime errors at deserialization - source") {
@@ -465,10 +598,6 @@ class LiteKafkaUniversalJsonFunctionalTest
     val testData = Table(
       ("config", "expected"),
       (
-        config(obj(), schemaObjStr, schemaObjStr, objOutputAsInputField),
-        s"Not expected type: Null for field: 'field' with schema: $schemaString."
-      ),
-      (
         config(
           obj("foo_int" -> fromString("foo")),
           schemaMapAny,
@@ -495,7 +624,7 @@ class LiteKafkaUniversalJsonFunctionalTest
       (samplePerson, valid(samplePerson))
     )
 
-    forAll(testData) { (input: Json, expected: Validated[_, RunResult[_]]) =>
+    forAll(testData) { (input: Json, expected: Validated[_, RunResult]) =>
       List(schemaTrue, schemaEmpty).foreach { schema =>
         val results = runWithValueResults(config(input, schema, schema))
         results shouldBe expected

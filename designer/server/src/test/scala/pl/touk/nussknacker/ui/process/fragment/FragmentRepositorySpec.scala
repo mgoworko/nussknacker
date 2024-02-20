@@ -5,12 +5,12 @@ import akka.http.scaladsl.testkit.ScalatestRouteTest
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
-import pl.touk.nussknacker.engine.api.process.VersionId
 import pl.touk.nussknacker.test.VeryPatientScalaFutures
-import pl.touk.nussknacker.ui.api.helpers.{NuResourcesTest, ProcessTestData, TestProcessingTypes}
-import pl.touk.nussknacker.ui.process.marshall.ProcessConverter
-
-import scala.language.higherKinds
+import pl.touk.nussknacker.test.utils.domain.ProcessTestData.sampleFragmentName
+import pl.touk.nussknacker.test.base.it.NuResourcesTest
+import pl.touk.nussknacker.test.config.WithSimplifiedDesignerConfig.TestProcessingType.Streaming
+import pl.touk.nussknacker.test.utils.domain.ProcessTestData
+import pl.touk.nussknacker.ui.process.marshall.CanonicalProcessConverter
 
 class FragmentRepositorySpec
     extends AnyFlatSpec
@@ -20,35 +20,20 @@ class FragmentRepositorySpec
     with NuResourcesTest
     with VeryPatientScalaFutures {
 
-  import pl.touk.nussknacker.ui.api.helpers.TestCategories._
+  it should "load fragments" in {
+    val sampleFragment  = CanonicalProcessConverter.toScenarioGraph(ProcessTestData.sampleFragment)
+    val sampleFragment2 = CanonicalProcessConverter.toScenarioGraph(ProcessTestData.sampleFragment2)
 
-  it should "fetches fragment by its version" in {
-    val sampleFragment =
-      ProcessConverter.toDisplayable(ProcessTestData.sampleFragment, TestProcessingTypes.Streaming, Category1)
-    val sampleFragment2 =
-      ProcessConverter.toDisplayable(ProcessTestData.sampleFragment2, TestProcessingTypes.Streaming, Category1)
-    savefragment(sampleFragment) {
+    saveFragment(sampleFragment) {
       status shouldEqual StatusCodes.OK
     }
-    updateProcess(sampleFragment2) {
+    updateProcess(sampleFragment2, sampleFragmentName) {
       status shouldEqual StatusCodes.OK
     }
 
-    ProcessTestData.sampleFragment.metaData.id shouldBe ProcessTestData.sampleFragment2.metaData.id
-    ProcessTestData.sampleFragment should not be ProcessTestData.sampleFragment2
-
-    fragmentRepository.loadFragments() shouldBe Set(FragmentDetails(ProcessTestData.sampleFragment2, Category1))
-    val fragmentId = ProcessTestData.sampleFragment.metaData.id
-    fragmentRepository.loadFragments(Map(fragmentId -> VersionId(1))) shouldBe Set(
-      FragmentDetails(ProcessTestData.emptyFragment, Category1)
+    fragmentRepository.fetchLatestFragments(Streaming.stringify)(adminUser).futureValue shouldBe List(
+      ProcessTestData.sampleFragment2
     )
-    fragmentRepository.loadFragments(Map(fragmentId -> VersionId(2))) shouldBe Set(
-      FragmentDetails(ProcessTestData.sampleFragment, Category1)
-    )
-    fragmentRepository.loadFragments(Map(fragmentId -> VersionId(3))) shouldBe Set(
-      FragmentDetails(ProcessTestData.sampleFragment2, Category1)
-    )
-    fragmentRepository.loadFragments() shouldBe Set(FragmentDetails(ProcessTestData.sampleFragment2, Category1))
   }
 
 }

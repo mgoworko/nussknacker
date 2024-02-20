@@ -3,7 +3,7 @@ package pl.touk.nussknacker.ui.process.repository
 import pl.touk.nussknacker.engine.api.deployment.ProcessAction
 import pl.touk.nussknacker.engine.api.process.{ProcessId, ProcessName, ScenarioVersion, VersionId}
 import pl.touk.nussknacker.security.Permission
-import pl.touk.nussknacker.ui.db.EspTables
+import pl.touk.nussknacker.ui.db.NuTables
 import pl.touk.nussknacker.ui.db.entity._
 import pl.touk.nussknacker.ui.security.api.{AdminUser, CommonUser, LoggedUser}
 import pl.touk.nussknacker.ui.{BadRequestError, NotFoundError}
@@ -12,7 +12,7 @@ import java.sql.Timestamp
 import scala.language.higherKinds
 
 //FIXME: It's temporary trait. In future we should merge and refactor: DBFetchingProcessRepository, ProcessDBQueryRepository and DBProcessRepository to one repository
-trait ProcessDBQueryRepository[F[_]] extends Repository[F] with EspTables {
+trait ProcessDBQueryRepository[F[_]] extends Repository[F] with NuTables {
   import api._
 
   protected def processTableFilteredByUser(
@@ -63,7 +63,7 @@ trait ProcessDBQueryRepository[F[_]] extends Repository[F] with EspTables {
       implicit fetchShape: ScenarioShapeFetchStrategy[_]
   ): TableQuery[ProcessVersionEntityFactory#BaseProcessVersionEntity] =
     fetchShape match {
-      case ScenarioShapeFetchStrategy.FetchDisplayable =>
+      case ScenarioShapeFetchStrategy.FetchScenarioGraph =>
         processVersionsTableWithScenarioJson
           .asInstanceOf[TableQuery[ProcessVersionEntityFactory#BaseProcessVersionEntity]]
       case ScenarioShapeFetchStrategy.FetchCanonical =>
@@ -99,10 +99,10 @@ object ProcessDBQueryRepository {
       actions = actions
     )
 
-  final case class ProcessNotFoundError(id: String) extends NotFoundError(s"No scenario $id found")
+  final case class ProcessNotFoundError(name: ProcessName) extends NotFoundError(s"No scenario $name found")
 
-  final case class ProcessVersionNotFoundError(processId: ProcessId, version: VersionId)
-      extends NotFoundError(s"Scenario $processId in version $version not found")
+  final case class ProcessVersionNotFoundError(processName: ProcessName, version: VersionId)
+      extends NotFoundError(s"Scenario $processName in version $version not found")
 
   final case class ProcessAlreadyExists(id: String) extends BadRequestError(s"Scenario $id already exists")
 

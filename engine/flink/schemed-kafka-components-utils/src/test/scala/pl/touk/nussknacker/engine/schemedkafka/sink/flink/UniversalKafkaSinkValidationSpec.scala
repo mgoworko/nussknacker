@@ -2,19 +2,12 @@ package pl.touk.nussknacker.engine.schemedkafka.sink.flink
 
 import com.typesafe.config.ConfigFactory
 import io.confluent.kafka.schemaregistry.client.{SchemaRegistryClient => CSchemaRegistryClient}
-import pl.touk.nussknacker.engine.api.component.SingleComponentConfig
-import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.{
-  CustomNodeError,
-  EmptyMandatoryParameter,
-  InvalidPropertyFixedValue
-}
+import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.{CustomNodeError, InvalidPropertyFixedValue}
 import pl.touk.nussknacker.engine.api.context.ValidationContext
-import pl.touk.nussknacker.engine.api.process.EmptyProcessConfigCreator
 import pl.touk.nussknacker.engine.api.validation.ValidationMode
 import pl.touk.nussknacker.engine.api.{MetaData, NodeId, StreamMetaData, VariableConstants}
-import pl.touk.nussknacker.engine.compile.ExpressionCompiler
-import pl.touk.nussknacker.engine.compile.nodecompilation.{GenericNodeTransformationValidator, TransformationResult}
-import pl.touk.nussknacker.engine.graph.evaluatedparam.Parameter
+import pl.touk.nussknacker.engine.compile.nodecompilation.{DynamicNodeValidator, TransformationResult}
+import pl.touk.nussknacker.engine.graph.evaluatedparam.{Parameter => NodeParameter}
 import pl.touk.nussknacker.engine.graph.expression.Expression
 import pl.touk.nussknacker.engine.schemedkafka.KafkaUniversalComponentTransformer._
 import pl.touk.nussknacker.engine.schemedkafka.helpers.KafkaAvroSpecMixin
@@ -33,22 +26,19 @@ class UniversalKafkaSinkValidationSpec extends KafkaAvroSpecMixin with KafkaAvro
   override protected def schemaRegistryClientFactory: SchemaRegistryClientFactory = factory
 
   private def validate(params: (String, Expression)*): TransformationResult = {
-    val modelData = LocalModelData(ConfigFactory.empty(), new EmptyProcessConfigCreator)
-    val validator = new GenericNodeTransformationValidator(
-      ExpressionCompiler.withoutOptimization(modelData),
-      modelData.modelDefinition.expressionConfig
-    )
+    val modelData = LocalModelData(ConfigFactory.empty(), List.empty)
+    val validator = DynamicNodeValidator(modelData)
 
     implicit val meta: MetaData = MetaData("processId", StreamMetaData())
     implicit val nodeId: NodeId = NodeId("id")
-    val paramsList              = params.toList.map(p => Parameter(p._1, p._2))
+    val paramsList              = params.toList.map(p => NodeParameter(p._1, p._2))
     validator
       .validateNode(
         universalSinkFactory,
         paramsList,
         Nil,
         Some(VariableConstants.InputVariableName),
-        SingleComponentConfig.zero
+        Map.empty
       )(ValidationContext())
       .toOption
       .get
@@ -94,7 +84,7 @@ class UniversalKafkaSinkValidationSpec extends KafkaAvroSpecMixin with KafkaAvro
       TopicParamName,
       None,
       "'tereferer'",
-      List("", "'fullname'", "'generated-avro'"),
+      List("", "'fullname'"),
       "id"
     ) :: InvalidPropertyFixedValue(SchemaVersionParamName, None, "'1'", List("'latest'"), "id") :: Nil
   }

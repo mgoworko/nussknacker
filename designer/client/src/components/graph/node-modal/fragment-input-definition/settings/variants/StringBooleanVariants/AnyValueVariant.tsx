@@ -1,11 +1,13 @@
 import React from "react";
 import InitialValue from "../fields/InitialValue";
-import { SettingLabelStyled, SettingRow } from "../fields/StyledSettingsComponnets";
+import { SettingLabelStyled } from "../fields/StyledSettingsComponnets";
 import { TextAreaNodeWithFocus } from "../../../../../../withFocus";
 import { AnyValueParameterVariant, onChangeType } from "../../../item";
-import { VariableTypes } from "../../../../../../../types";
+import { NodeValidationError, VariableTypes } from "../../../../../../../types";
 import { useTranslation } from "react-i18next";
-import { Error } from "../../../../editors/Validators";
+import { ValidationsFields } from "../fields/validation";
+import { getValidationErrorsForField } from "../../../../editors/Validators";
+import { FormControl } from "@mui/material";
 
 interface Props {
     item: AnyValueParameterVariant;
@@ -13,25 +15,31 @@ interface Props {
     path: string;
     variableTypes: VariableTypes;
     readOnly: boolean;
-    fieldsErrors: Error[];
+    errors: NodeValidationError[];
 }
 
-export const AnyValueVariant = ({ item, path, onChange, readOnly, variableTypes, fieldsErrors }: Props) => {
+export const AnyValueVariant = ({ item, path, onChange, readOnly, variableTypes, errors }: Props) => {
     const { t } = useTranslation();
 
     return (
         <>
-            {/*<ValidationsFields path={path} item={item} onChange={onChange} variableTypes={variableTypes} />*/}
+            <ValidationsFields
+                path={path}
+                item={item}
+                onChange={onChange}
+                variableTypes={variableTypes}
+                readOnly={readOnly}
+                errors={errors}
+            />
             <InitialValue
                 path={path}
                 item={item}
                 onChange={onChange}
                 readOnly={readOnly}
                 variableTypes={variableTypes}
-                fieldsErrors={fieldsErrors}
-                fieldName={`$param.${item.name}.$initialValue`}
+                fieldErrors={getValidationErrorsForField(errors, `$param.${item.name}.$initialValue`)}
             />
-            <SettingRow>
+            <FormControl>
                 <SettingLabelStyled>{t("fragment.hintText", "Hint text:")}</SettingLabelStyled>
                 <TextAreaNodeWithFocus
                     value={item.hintText}
@@ -40,7 +48,7 @@ export const AnyValueVariant = ({ item, path, onChange, readOnly, variableTypes,
                     disabled={readOnly}
                     className={"node-input"}
                 />
-            </SettingRow>
+            </FormControl>
         </>
     );
 };

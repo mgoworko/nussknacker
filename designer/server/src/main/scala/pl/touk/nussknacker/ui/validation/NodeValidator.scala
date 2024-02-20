@@ -17,28 +17,34 @@ import pl.touk.nussknacker.engine.util.Implicits.RichScalaMap
 import pl.touk.nussknacker.engine.variables.GlobalVariablesPreparer
 import pl.touk.nussknacker.restmodel.validation.PrettyValidationErrors
 import pl.touk.nussknacker.ui.api.{NodeValidationRequest, NodeValidationResult}
-import pl.touk.nussknacker.ui.definition.UIProcessObjectsFactory
+import pl.touk.nussknacker.ui.definition.DefinitionsService
 import pl.touk.nussknacker.ui.process.fragment.FragmentRepository
+import pl.touk.nussknacker.ui.security.api.LoggedUser
 
 class NodeValidator(modelData: ModelData, fragmentRepository: FragmentRepository) {
 
-  private val fragmentResolver = FragmentResolver(k => fragmentRepository.get(k).map(_.canonical))
-
-  private val nodeDataValidator = new NodeDataValidator(modelData, fragmentResolver)
-
-  def validate(scenarioName: ProcessName, nodeData: NodeValidationRequest): NodeValidationResult = {
+  def validate(scenarioName: ProcessName, nodeData: NodeValidationRequest)(
+      implicit loggedUser: LoggedUser
+  ): NodeValidationResult = {
     implicit val metaData: MetaData = nodeData.processProperties.toMetaData(scenarioName)
+
+    val nodeDataValidator = new NodeDataValidator(modelData)
 
     val validationContext = prepareValidationContext(nodeData.variableTypes)
     val branchCtxs        = nodeData.branchVariableTypes.getOrElse(Map.empty).mapValuesNow(prepareValidationContext)
 
     val edges = nodeData.outgoingEdges.getOrElse(Nil).map(e => OutgoingEdge(e.to, e.edgeType))
 
+    // We create fragmentResolver for each request, because it requires LoggedUser to fetch fragments
+    val fragmentResolver =
+      FragmentResolver(fragmentName => fragmentRepository.fetchLatestFragmentSync(fragmentName))
+
     nodeDataValidator.validate(
       nodeData.nodeData,
       validationContext,
       branchCtxs,
-      edges
+      edges,
+      fragmentResolver
     ) match {
       case ValidationNotPerformed =>
         NodeValidationResult(
@@ -48,7 +54,7 @@ class NodeValidator(modelData: ModelData, fragmentRepository: FragmentRepository
           validationPerformed = false
         )
       case ValidationPerformed(errors, parameters, expressionType) =>
-        val uiParams = parameters.map(_.map(UIProcessObjectsFactory.createUIParameter))
+        val uiParams = parameters.map(_.map(DefinitionsService.createUIParameter))
 
         // We don't return MissingParameter error when we are returning those missing parameters to be added - since
         // it's not really exception ATM
@@ -71,7 +77,8 @@ class NodeValidator(modelData: ModelData, fragmentRepository: FragmentRepository
       variableTypes: Map[String, TypingResult]
   )(implicit metaData: MetaData): ValidationContext = {
     GlobalVariablesPreparer(modelData.modelDefinition.expressionConfig)
-      .validationContextWithLocalVariables(metaData, variableTypes)
+      .prepareValidationContextWithGlobalVariablesOnly(metaData)
+      .copy(localVariables = variableTypes)
   }
 
 }

@@ -4,19 +4,21 @@ import io.circe.generic.JsonCodec
 import io.circe.generic.extras.ConfiguredJsonCodec
 import io.circe.generic.extras.semiauto.{deriveConfiguredDecoder, deriveConfiguredEncoder}
 import io.circe.{Decoder, Encoder, HCursor}
+import pl.touk.nussknacker.engine.api.process.ProcessName
 import pl.touk.nussknacker.engine.api.CirceUtil._
 
 @JsonCodec case class LayoutData(x: Long, y: Long)
 
-// TODO: MetaData should hold ProcessName as id
+// TODO: This class should be moved into components-api, scenario-api shouldn't use this. It should hold only properties
+//       and ScenarioRuntimeMetadata (Currently called ProcessVersion)
 @ConfiguredJsonCodec(encodeOnly = true) case class MetaData(id: String, additionalFields: ProcessAdditionalFields) {
-  def isFragment: Boolean = typeSpecificData.isFragment
-
   def typeSpecificData: TypeSpecificData = additionalFields.typeSpecificProperties
 
   def withTypeSpecificData(typeSpecificData: TypeSpecificData): MetaData = {
     MetaData(id, typeSpecificData)
   }
+
+  def name: ProcessName = ProcessName(id)
 
 }
 

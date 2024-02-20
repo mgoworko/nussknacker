@@ -6,10 +6,36 @@ import net.ceedubs.ficus.readers.{ArbitraryTypeReader, ValueReader}
 import pl.touk.nussknacker.engine.api.process.ProcessObjectDependencies
 import pl.touk.nussknacker.engine.version.BuildInfo
 
-/*
-  Service, SourceFactory, SinkFactory, CustomStreamTransformer
- */
-trait Component
+/**
+  * It is our base class for every Component delivered within the model.
+  * Possible implementations are: Service, SourceFactory, SinkFactory, CustomStreamTransformer
+  * This class is marked as Serializable for easier testing with Flink. (See LocalModelData)
+  * Components are also in most cases only a factories for the "Executors" which process data streams so
+  * in fact they need to be serializable.
+  */
+trait Component extends Serializable {
+  // Returns allowed processing modes. In some case we can determine this set based on implementing classes
+  // like in Service case, but in other cases, Component class is only a factory that returns some other class
+  // and we don't know if this class allow given processing mode or not so the developer have to specify this
+  // by his/her own
+  def allowedProcessingModes: Option[Set[ProcessingMode]]
+}
+
+trait UnboundedStreamComponent { self: Component =>
+  override def allowedProcessingModes: Option[Set[ProcessingMode]] = Some(Set(ProcessingMode.UnboundedStream))
+}
+
+trait BoundedStreamComponent { self: Component =>
+  override def allowedProcessingModes: Option[Set[ProcessingMode]] = Some(Set(ProcessingMode.BoundedStream))
+}
+
+trait RequestResponseComponent { self: Component =>
+  override def allowedProcessingModes: Option[Set[ProcessingMode]] = Some(Set(ProcessingMode.RequestResponse))
+}
+
+trait AllProcessingModesComponent { self: Component =>
+  override def allowedProcessingModes: Option[Set[ProcessingMode]] = None
+}
 
 object ComponentProviderConfig {
 

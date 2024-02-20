@@ -1,50 +1,60 @@
 package pl.touk.nussknacker.engine.kafka.source.flink
 
 import pl.touk.nussknacker.engine.api.typed.typing.Typed
-import pl.touk.nussknacker.engine.definition.TypeInfos.{ClazzDefinition, StaticMethodInfo}
+import pl.touk.nussknacker.engine.definition.clazz.{ClassDefinition, StaticMethodDefinition}
 import KafkaSourceFactoryMixin.{SampleKey, SampleValue}
 import io.circe.Json
 import pl.touk.nussknacker.engine.api.generics.MethodTypeInfo
+import pl.touk.nussknacker.engine.kafka.source.flink.KafkaSourceFactoryProcessConfigCreator.ResultsHolders
 
 class KafkaSourceFactoryDefinitionExtractorSpec extends KafkaSourceFactoryProcessMixin {
 
   test(
-    "should extract valid type definitions from source based on GenericNodeTransformation with explicit type definitions"
+    "should extract valid type definitions from source based on DynamicComponent with explicit type definitions"
   ) {
-    val extractedTypes = modelDefinitionWithTypes.typeDefinitions.all
+    val extractedTypes = modelData.modelDefinitionWithClasses.classDefinitions.all
 
-    // Here we are checking explicit type extraction for sources based on GenericNodeTransformation
+    // Here we are checking explicit type extraction for sources based on DynamicComponent
     // with defined explicit type extraction.
     // It is important that SampleKey and SampleValue are used only by source of that kind,
     // and they must not be returned by other services.
     extractedTypes should contain allOf (
-      ClazzDefinition(
+      ClassDefinition(
         Typed.genericTypeClass(classOf[SampleKey], Nil),
         Map(
-          "partOne"  -> List(StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[String]), "partOne", None)),
-          "partTwo"  -> List(StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[Long]), "partTwo", None)),
-          "toString" -> List(StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[String]), "toString", None)),
+          "partOne"  -> List(StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[String]), "partOne", None)),
+          "partTwo"  -> List(StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[Long]), "partTwo", None)),
+          "toString" -> List(StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[String]), "toString", None)),
           "originalDisplay" -> List(
-            StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[String]), "originalDisplay", None)
+            StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[String]), "originalDisplay", None)
           ),
-          "asJson" -> List(StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[Json]), "asJson", None))
+          "asJson" -> List(StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[Json]), "asJson", None))
         ),
         Map.empty
       ),
-      ClazzDefinition(
+      ClassDefinition(
         Typed.genericTypeClass(classOf[SampleValue], Nil),
         Map(
-          "id"       -> List(StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[String]), "id", None)),
-          "field"    -> List(StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[String]), "field", None)),
-          "toString" -> List(StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[String]), "toString", None)),
+          "id"       -> List(StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[String]), "id", None)),
+          "field"    -> List(StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[String]), "field", None)),
+          "toString" -> List(StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[String]), "toString", None)),
           "originalDisplay" -> List(
-            StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[String]), "originalDisplay", None)
+            StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[String]), "originalDisplay", None)
           ),
-          "asJson" -> List(StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[Json]), "asJson", None))
+          "asJson" -> List(StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[Json]), "asJson", None))
         ),
         Map.empty
       )
     )
   }
+
+  override protected val resultHolders: () => ResultsHolders = () =>
+    KafkaSourceFactoryDefinitionExtractorSpec.resultsHolders
+
+}
+
+object KafkaSourceFactoryDefinitionExtractorSpec extends Serializable {
+
+  private val resultsHolders = new ResultsHolders
 
 }

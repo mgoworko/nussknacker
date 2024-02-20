@@ -4,10 +4,12 @@ import React, { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSelector } from "react-redux";
 import HttpService from "../../http/HttpService";
-import { getProcessId, getProcessToDisplay } from "../../reducers/selectors/graph";
+import { getProcessName, getScenarioGraph } from "../../reducers/selectors/graph";
 import { getFeatureSettings } from "../../reducers/selectors/settings";
 import { PromptContent } from "../../windowManager";
 import {
+    extendErrors,
+    getValidationErrorsForField,
     literalIntegerValueValidator,
     mandatoryValueValidator,
     maximalNumberValidator,
@@ -15,11 +17,13 @@ import {
 } from "../graph/node-modal/editors/Validators";
 import { NodeInput } from "../withFocus";
 import ValidationLabels from "./ValidationLabels";
+import { isEmpty } from "lodash";
+import { Typography } from "@mui/material";
 
 function GenerateTestDataDialog(props: WindowContentProps): JSX.Element {
     const { t } = useTranslation();
-    const processId = useSelector(getProcessId);
-    const processToDisplay = useSelector(getProcessToDisplay);
+    const processName = useSelector(getProcessName);
+    const scenarioGraph = useSelector(getScenarioGraph);
     const maxSize = useSelector(getFeatureSettings).testDataSettings.maxSamplesCount;
 
     const [{ testSampleSize }, setState] = useState({
@@ -28,12 +32,13 @@ function GenerateTestDataDialog(props: WindowContentProps): JSX.Element {
     });
 
     const confirmAction = useCallback(async () => {
-        await HttpService.generateTestData(processId, testSampleSize, processToDisplay);
+        await HttpService.generateTestData(processName, testSampleSize, scenarioGraph);
         props.close();
-    }, [processId, processToDisplay, props, testSampleSize]);
+    }, [processName, testSampleSize, scenarioGraph, props]);
 
     const validators = [literalIntegerValueValidator, minimalNumberValidator(0), maximalNumberValidator(maxSize), mandatoryValueValidator];
-    const isValid = validators.every((v) => v.isValid(testSampleSize));
+    const errors = extendErrors([], testSampleSize, "testData", validators);
+    const isValid = isEmpty(errors);
 
     const buttons: WindowButtonProps[] = useMemo(
         () => [
@@ -46,7 +51,7 @@ function GenerateTestDataDialog(props: WindowContentProps): JSX.Element {
     return (
         <PromptContent {...props} buttons={buttons}>
             <div className={cx("modalContentDark", css({ minWidth: 400 }))}>
-                <h3>{t("test-generate.title", "Generate test data")}</h3>
+                <Typography variant={"h3"}>{t("test-generate.title", "Generate test data")}</Typography>
                 <NodeInput
                     value={testSampleSize}
                     onChange={(event) => setState({ testSampleSize: event.target.value })}
@@ -55,7 +60,7 @@ function GenerateTestDataDialog(props: WindowContentProps): JSX.Element {
                     })}
                     autoFocus
                 />
-                <ValidationLabels validators={validators} values={[testSampleSize]} />
+                <ValidationLabels fieldErrors={getValidationErrorsForField(errors, "testData")} />
             </div>
         </PromptContent>
     );

@@ -1,7 +1,60 @@
 # Changelog
 
-1.13.0 (Not released yet)
+1.14.0 (Not released yet)
 -------------------------
+* [#4287](https://github.com/TouK/nussknacker/pull/4287) [#5257](https://github.com/TouK/nussknacker/pull/5257) [#5432](https://github.com/TouK/nussknacker/pull/5432) Libraries bump:
+  * Flink: 1.16.2 -> 1.16.3
+  * Cats Effect: 2.5.5 -> 3.5.2
+  * Kafka client: 3.3.2 -> 3.6.1
+  * Confluent Schema Registry client: 7.3.2 -> 7.5.1
+  * Avro: 1.11.1 -> 1.11.3
+* [#5253](https://github.com/TouK/nussknacker/pull/5253) Removed the option to configure fragments via config. Due to the recent expansion of FragmentParameter, the option has become largely redundant. Removed to decrease unnecessary complexity.
+* [#5271](https://github.com/TouK/nussknacker/pull/5271) Changed `AdditionalUIConfigProvider.getAllForProcessingType` API to be more in line with FragmentParameter
+* [#5278](https://github.com/TouK/nussknacker/pull/5278) Recreate assembled model JAR for Flink if it got removed (e.g. by systemd-tmpfiles)
+* [#5280](https://github.com/TouK/nussknacker/pull/5280) Security improvement: Checking if user has access rights to fragment's Category for fragments served by definitions API
+* [#5303](https://github.com/TouK/nussknacker/pull/5303) Added `skipNodeResults` parameter to API endpoints that return scenario validation results
+* [#5323](https://github.com/TouK/nussknacker/pull/5323) Removed support for [the legacy categories configuration format](https://nussknacker.io/documentation/docs/1.12/installation_configuration_guide/DesignerConfiguration/#scenario-type-categories)
+* [#5266](https://github.com/TouK/nussknacker/pull/5266) Security improvement: removed accessing class internals of records in expressions
+* [#5361](https://github.com/TouK/nussknacker/pull/5361) Parameter's label can be specified not only via configuration, but also inside Component's implementation now
+* [#5368](https://github.com/TouK/nussknacker/pull/5368) A hidden features allowing to change `icon` and `docsUrl` inside properties modal by using `componentsUiConfig.$proprties` configuration option, was turned off
+* [#5356](https://github.com/TouK/nussknacker/pull/5356) Pushed configs provided by AdditionalUIConfigProvider deeper into domain (at the stage of component definition extraction), allowing it to impact validation. However, changes now require model reload.
+* [#5413](https://github.com/TouK/nussknacker/pull/5413) Generic types (Records, Lists and other collections) now uses generic parameters in their method's return type e.g. `{foo: 1, bar: 2}.get('foo')` returns `Integer` instead of `Unknown`
+* [#5413](https://github.com/TouK/nussknacker/pull/5413) Avro Records now has additional `get(String)` method allowing to access fields dynamically
+* [#5419](https://github.com/TouK/nussknacker/pull/5419) Remove system properties from merged model config
+* [#5363](https://github.com/TouK/nussknacker/pull/5363) Improvements and fixes related to scenario level errors:
+  * Fixed bug where scenario level error related to node flashed when opening a node
+  * Fixed highlighting of fragment nodes causing errors
+  * Display fragment level validation errors when editing fragment
+  * Improved error messages
+* [#5364](https://github.com/TouK/nussknacker/pull/5364) Fixed wrong expression suggestions and validation errors in disabled nodes
+* [#5447](https://github.com/TouK/nussknacker/pull/5447) Fixed `java.lang.reflect.InaccessibleObjectException: Unable to make public java.lang.Object` exception by downgrade of JRE from 17 to 11 in lite runner image for scala 2.13
+* [#5465](https://github.com/TouK/nussknacker/pull/5465) Fix: Sometimes `Bad expression type, expected: X found X` error was reported when comparing matching Records.
+  It happened for records that had fields with mixed different types of fields e.g. simple classes with nested records
+* [#5465](https://github.com/TouK/nussknacker/pull/5465) Fix: Ternary operator (`expression ? x : y`) returned sometimes `EmptyUnion` type which couldn't be passed anywhere.
+* [#5465](https://github.com/TouK/nussknacker/pull/5465) Fix: Wasn't possible to compare a Record with a Map.
+* [#5457](https://github.com/TouK/nussknacker/pull/5457) Fix: Array types wasn't serialized correctly which caused deserialization error during node validation.
+* [#5475](https://github.com/TouK/nussknacker/pull/5475) SpEL expressions checking improvement: The equals operator used with two Lists with different element types is reported as an error
+* [#5389](https://github.com/TouK/nussknacker/pull/5389) Scenario activity API OpenAPI-based documentation (e.g. `https://demo.nussknacker.io/api/docs`)
+* [#5509](https://github.com/TouK/nussknacker/pull/5509) Security improvement: 
+  * Added authorization check for listing activities and downloading attachments in scenario activity API
+  * Fixed the ability to download an unrelated attachment from a given scenario
+* [#5522](https://github.com/TouK/nussknacker/pull/5522), [#5519](https://github.com/TouK/nussknacker/pull/5519) Scenario status caching more often
+* [#5505](https://github.com/TouK/nussknacker/pull/5505) Fix: anonymous user handling regression
+* [#5438](https://github.com/TouK/nussknacker/pull/5438) [#5495](https://github.com/TouK/nussknacker/pull/5495) Improvement in DeploymentManager API:
+    * Alignment in the api of primary (deploy/cancel) actions and the experimental api of custom actions.
+* [#5371](https://github.com/TouK/nussknacker/pull/5371) Added new parameter editor type: DictParameterEditor.
+* [#5373](https://github.com/TouK/nussknacker/pull/5373) API changes related to components development
+* [#5566](https://github.com/TouK/nussknacker/pull/5566) [#5550](https://github.com/TouK/nussknacker/pull/5537) 
+  [#5515](https://github.com/TouK/nussknacker/pull/5515) [#5474](https://github.com/TouK/nussknacker/pull/5474) Processing mode and engine available in the GUI
+* [#5566](https://github.com/TouK/nussknacker/pull/5566) `DEFAULT_SCENARIO_TYPE` environment variable is not supported anymore 
+
+1.13.1 (Not released yet)
+------------------------
+* [#5447](https://github.com/TouK/nussknacker/pull/5447) Fixed `java.lang.reflect.InaccessibleObjectException: Unable to make public java.lang.Object` exception by downgrade of JRE from 17 to 11 in lite runner image for scala 2.13
+
+1.13.0 (12 Jan 2024)
+-------------------------
+* [#5051](https://github.com/TouK/nussknacker/pull/5051) Allow users to perform inserts/updates on db by adding `Updates count` strategy to db-query service
 * [#4988](https://github.com/TouK/nussknacker/pull/4988) Refactor: Allow to use custom authentication methods in user-defined Authentication Providers
 * [#4711](https://github.com/TouK/nussknacker/pull/4711) [#4862](https://github.com/TouK/nussknacker/pull/4862) Added AdditionalUIConfigProviderFactory API that allows changing components' configs and scenario properties' UI configs without model reload
 * [#4860](https://github.com/TouK/nussknacker/pull/4860) Rename `additionalProperties` to `scenarioProperties`
@@ -28,8 +81,26 @@
 * [#4887](https://github.com/TouK/nussknacker/pull/4887) New parameter validator - `ValidationExpressionParameterValidator` that allows to use SpEL (or any other) expression to validate parameters
 * [#5077](https://github.com/TouK/nussknacker/pull/5077) Add an option to set schema on connections in SQL enricher
 * [#5059](https://github.com/TouK/nussknacker/pull/5059) [#5100](https://github.com/TouK/nussknacker/pull/5100) [#5103](https://github.com/TouK/nussknacker/pull/5103) Breaking change: Scenario type to Category mapping become 1-to-1 instead of 1-to-many.
-* [#4978](https://github.com/TouK/nussknacker/pull/4978) Expand FragmentParameter with new fields: hintText, initialValue, required, inputMode
+* [#4978](https://github.com/TouK/nussknacker/pull/4978) [#5241](https://github.com/TouK/nussknacker/pull/5241) Expand `FragmentParameter` with new fields:
+  * `hintText` - shown next to the parameter when using the fragment
+  * `initialValue` - initial value of the parameter (before user changes it)
+  * `required` - whether the parameter is mandatory
+  * `valueCompileTimeValidation` - allows configuration of `ValidationExpressionParameterValidator` for this parameter
 * [#4953](https://github.com/TouK/nussknacker/pull/4953) Improved node validation
+* [#5141](https://github.com/TouK/nussknacker/pull/5141) Security improvement: API endpoints check if user has access rights to Category associated with Processing Type provided in API
+* [#5182](https://github.com/TouK/nussknacker/pull/5182) [#5203](https://github.com/TouK/nussknacker/pull/5203) [#5250](https://github.com/TouK/nussknacker/pull/5250) Component, User and Notification API OpenAPI-based documentation (e.g. `https://demo.nussknacker.io/api/docs`)
+* [#5171](https://github.com/TouK/nussknacker/pull/5171) Breaking change: some components changed identifier - url's and identifiers in node errors are changed
+* [#5171](https://github.com/TouK/nussknacker/pull/5171) Component `mapVariable` was renamed to `record-variable`
+* [#5223](https://github.com/TouK/nussknacker/pull/5223) Legacy low level kafka components were removed
+* [#5233](https://github.com/TouK/nussknacker/pull/5233) Fix: Not expected type: Null runtime error for non-nullable, optional json fields that were not provided by user in sink
+* [#5233](https://github.com/TouK/nussknacker/pull/5233) Added support for schema evolution in kafka using json schema and response sink
+* [#5197](https://github.com/TouK/nussknacker/pull/5197) Improved accessing fields in records in expressions - fields can now be statically accessed using indexing
+* [#5312](https://github.com/TouK/nussknacker/pull/5312) Collect component clears context variables
+* [#5313](https://github.com/TouK/nussknacker/pull/5313) Added CountWhen and Average aggregations
+
+1.12.6 (29 Jan 2024)
+------------------------
+* [#5447](https://github.com/TouK/nussknacker/pull/5447) Fixed `java.lang.reflect.InaccessibleObjectException: Unable to make public java.lang.Object` exception by downgrade of JRE from 17 to 11 in lite runner image for scala 2.13
 
 1.12.5 (1 Dec 2023)
 ------------------------

@@ -1,46 +1,32 @@
 package pl.touk.nussknacker.restmodel
 
-import io.circe.Decoder
 import io.circe.generic.JsonCodec
-import io.circe.generic.extras.semiauto.deriveConfiguredDecoder
-import pl.touk.nussknacker.engine.api.CirceUtil._
-import pl.touk.nussknacker.engine.api.component.ComponentType.ComponentType
-import pl.touk.nussknacker.engine.api.component.{ComponentGroupName, SingleComponentConfig}
-import pl.touk.nussknacker.engine.api.definition.{ParameterEditor, ParameterValidator}
-import pl.touk.nussknacker.engine.api.deployment.CustomAction
+import io.circe.generic.extras.semiauto.{deriveConfiguredDecoder, deriveConfiguredEncoder}
+import io.circe.{Decoder, Encoder}
+import pl.touk.nussknacker.engine.api.component.{ComponentGroupName, ComponentId}
+import pl.touk.nussknacker.engine.api.definition.ParameterEditor
+import pl.touk.nussknacker.engine.api.deployment.{CustomAction, ScenarioActionName}
 import pl.touk.nussknacker.engine.api.typed.typing.TypingResult
+import pl.touk.nussknacker.engine.graph.EdgeType
+import pl.touk.nussknacker.engine.graph.evaluatedparam.{Parameter => NodeParameter}
 import pl.touk.nussknacker.engine.graph.expression.Expression
 import pl.touk.nussknacker.engine.graph.node.NodeData
-import pl.touk.nussknacker.engine.graph.{EdgeType, evaluatedparam}
-import pl.touk.nussknacker.engine.util.Implicits.RichScalaMap
 
 import java.net.URI
 
 package object definition {
 
-  @JsonCodec(encodeOnly = true) final case class UIProcessObjects(
-      componentGroups: List[ComponentGroup],
-      processDefinition: UIProcessDefinition,
-      componentsConfig: Map[String, SingleComponentConfig],
+  import pl.touk.nussknacker.engine.api.CirceUtil._
+
+  // This class contains various views on definitions, used in a different FE contexts
+  @JsonCodec(encodeOnly = true) final case class UIDefinitions(
+      // This is dedicated view for the components toolbox panel
+      componentGroups: List[UIComponentGroup],
+      components: Map[ComponentId, UIComponentDefinition],
+      classes: List[TypingResult],
       scenarioPropertiesConfig: Map[String, UiScenarioPropertyConfig],
-      edgesForNodes: List[NodeEdges],
-      customActions: List[UICustomAction],
-      defaultAsyncInterpretation: Boolean
-  )
-
-  // TODO: in the future, we would like to map components by ComponentId, not by `label` like currently, and keep `label` in SingleComponentConfig
-  // this would also make config merging logic in `UIProcessObjectsFactory.prepareUIProcessObjects` simpler
-  @JsonCodec(encodeOnly = true) final case class UIProcessDefinition(
-      services: Map[String, UIObjectDefinition],
-      sourceFactories: Map[String, UIObjectDefinition],
-      sinkFactories: Map[String, UIObjectDefinition],
-      customStreamTransformers: Map[String, UIObjectDefinition],
-      typesInformation: Set[UIClazzDefinition],
-      fragmentInputs: Map[String, UIFragmentObjectDefinition]
-  )
-
-  @JsonCodec(encodeOnly = true) final case class UIClazzDefinition(
-      clazzName: TypingResult
+      edgesForNodes: List[UINodeEdges],
+      customActions: List[UICustomAction]
   )
 
   @JsonCodec(encodeOnly = true) final case class UIValueParameter(
@@ -53,76 +39,88 @@ package object definition {
       name: String,
       typ: TypingResult,
       editor: ParameterEditor,
-      validators: List[ParameterValidator],
+      // It it used for node parameter adjustment on FE side (see ParametersUtils.ts -> adjustParameters)
       defaultValue: Expression,
+      // additionalVariables and variablesToHide are served to FE because suggestions API requires full set of variables
+      // and ScenarioWithDetails.json.validationResult.nodeResults is not enough
       additionalVariables: Map[String, TypingResult],
       variablesToHide: Set[String],
+      // FE need this information because branch parameters aren't changed dynamically during node validation so they never
+      // should be invalidated
       branchParam: Boolean,
-      hintText: Option[String]
+      hintText: Option[String],
+      label: String
   )
 
-  @JsonCodec(encodeOnly = true) final case class UIObjectDefinition(
+  @JsonCodec(encodeOnly = true) final case class UIComponentDefinition(
+      // These parameters are mostly used for method based, static components. For dynamic components, it is the last fallback
+      // when scenario validation doesn't returned node results (e.g. when DisplayableProcess can't be translated to CanonicalProcess).
+      // And node validation wasn't performed yet (e.g. just after node details modal open) or for branch parameters
+      // which aren't handled dynamically. See getDynamicParameterDefinitions in selectors.tsx.
       parameters: List[UIParameter],
+      // TODO: remove this field
+      // We use it for two purposes:
+      // 1. Because we have a special "Output variable name" parameter which is treated specially both in scenario format
+      //    (see CustomNode.outputVar and Join.outputVar) and accordingly in the component definition
+      //    We can easily move this parameter to normal parameters but in the join case, it will change the order parameters
+      //    (it will be after branch parameters instead of before them)
+      // 2. We have a heuristic that trying to figure out context of variables to pass to node validation and to suggestions
+      //    (see. ProcessUtils.findAvailableVariables). This heuristic is used when DisplayableProcess can't be translated
+      //    to CanonicalProcess. When we replace CanonicalProcess by DisplayableProcess, it won't be needed anymore
       returnType: Option[TypingResult],
-      categories: List[String],
-  ) {
-
-    def hasNoReturn: Boolean = returnType.isEmpty
-
-  }
-
-  @JsonCodec(encodeOnly = true) final case class UIFragmentObjectDefinition(
-      parameters: List[UIParameter],
-      outputParameters: List[String],
-      returnType: Option[TypingResult],
-      categories: List[String]
-  ) {
-    def toUIObjectDefinition: UIObjectDefinition =
-      UIObjectDefinition(parameters, returnType, categories)
-  }
+      icon: String,
+      docsUrl: Option[String],
+      // This field is defined only for fragments
+      outputParameters: Option[List[String]]
+  )
 
   @JsonCodec(encodeOnly = true) final case class UISourceParameters(sourceId: String, parameters: List[UIParameter])
 
-  @JsonCodec final case class NodeTypeId(`type`: String, id: Option[String] = None)
-
-  @JsonCodec final case class NodeEdges(
-      nodeId: NodeTypeId,
+  final case class UINodeEdges(
+      componentId: ComponentId,
       edges: List[EdgeType],
       canChooseNodes: Boolean,
       isForInputDefinition: Boolean
   )
 
-  import pl.touk.nussknacker.engine.graph.node.NodeData._
+  object UINodeEdges {
+    implicit val componentIdEncoder: Encoder[ComponentId] = Encoder.encodeString.contramap(_.toString)
 
-  object ComponentTemplate {
+    implicit val encoder: Encoder[UINodeEdges] = deriveConfiguredEncoder
+  }
+
+  object UIComponentNodeTemplate {
 
     def create(
-        `type`: ComponentType,
-        node: NodeData,
-        categories: List[String],
-        branchParametersTemplate: List[evaluatedparam.Parameter] = List.empty
-    ): ComponentTemplate =
-      ComponentTemplate(`type`, `type`.toString, node, categories, branchParametersTemplate)
+        componentId: ComponentId,
+        nodeTemplate: NodeData,
+        branchParametersTemplate: List[NodeParameter]
+    ): UIComponentNodeTemplate =
+      UIComponentNodeTemplate(
+        componentId,
+        componentId.name,
+        nodeTemplate,
+        branchParametersTemplate
+      )
 
   }
 
-  @JsonCodec(encodeOnly = true) final case class ComponentTemplate(
-      `type`: ComponentType,
+  @JsonCodec(encodeOnly = true) final case class UIComponentNodeTemplate(
+      // componentId is used as a key in a DOM model - see ToolboxComponentGroup
+      componentId: ComponentId,
       label: String,
       node: NodeData,
-      categories: List[String],
-      branchParametersTemplate: List[evaluatedparam.Parameter] = List.empty
+      branchParametersTemplate: List[NodeParameter] = List.empty
   )
 
-  @JsonCodec(encodeOnly = true) final case class ComponentGroup(
+  @JsonCodec(encodeOnly = true) final case class UIComponentGroup(
       name: ComponentGroupName,
-      components: List[ComponentTemplate]
+      components: List[UIComponentNodeTemplate]
   )
 
   @JsonCodec final case class UiScenarioPropertyConfig(
       defaultValue: Option[String],
       editor: ParameterEditor,
-      validators: List[ParameterValidator],
       label: Option[String]
   )
 
@@ -132,8 +130,6 @@ package object definition {
   }
 
   object UICustomAction {
-
-    import pl.touk.nussknacker.restmodel.codecs.URICodecs.{uriDecoder, uriEncoder}
 
     def apply(action: CustomAction): UICustomAction = UICustomAction(
       name = action.name,
@@ -145,7 +141,7 @@ package object definition {
   }
 
   @JsonCodec final case class UICustomAction(
-      name: String,
+      name: ScenarioActionName,
       allowedStateStatusNames: List[String],
       icon: Option[URI],
       parameters: List[UICustomActionParameter]

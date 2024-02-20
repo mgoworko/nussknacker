@@ -98,6 +98,7 @@ in most cases you should not need to defined these settings. The settings you ca
   * `validators` - `MandatoryParameterValidator`, `NotBlankParameterValidator`, `RegexpParameterValidator`
   * `defaultValue`
   * `label`
+  * `hintText`
 
 Example (see [dev application config](https://github.com/TouK/nussknacker/blob/staging/engine/flink/management/dev-model/src/main/resources/defaultModelConfig.conf#L18) for more examples):
 ```
@@ -115,7 +116,8 @@ Example (see [dev application config](https://github.com/TouK/nussknacker/blob/s
                 description: "really has to match..."
               }
             ]
-            label: "Customer id (from CRM!)
+            label: "Customer id (from CRM!)"
+            hintText: "Input customerID in proper format"
         }
       }
       docsUrl: "https://en.wikipedia.org/wiki/Customer_service"
@@ -123,6 +125,15 @@ Example (see [dev application config](https://github.com/TouK/nussknacker/blob/s
     }
   }
 ```
+
+As a key in the configuration you can use component name or full component identifier which is in the `componentType-componentName` format.
+The second approach is mostly useful when there is more than one component with the same name (e.g. `source-kafka` and `sink-kafka` components). 
+Available component types:
+- `source` - for components located in the `sources` toolbox panel
+- `sink` - for components located in the `sinks` toolbox panel
+- `service` - for components located in the `enrichers` and `services` toolbox panels
+- `custom` - for components located in the `custom` and `optionalEndingCustom` toolbox panels
+- `built-in` - for built-in components (`choice`, `filter`, `record-variable`, `split`, `variable`) located in the `base` toolbox panel
 
 ### Component links
 
@@ -136,7 +147,7 @@ componentLinks: [
     title: "Source system"
     icon: "/assets/components/CustomNode.svg"
     url: "https://myCustom.com/dataSource/$componentName" 
-    supportedComponentTypes: ["openAPIEnricher1"]
+    supportedComponentTypes: ["service"]
   }
 ]
 ```

@@ -1,20 +1,20 @@
 package pl.touk.nussknacker.engine.expression
 
-import java.util.Optional
-import pl.touk.nussknacker.engine.ModelData
-import pl.touk.nussknacker.engine.api.expression.Expression
+import pl.touk.nussknacker.engine.api.expression.{Expression => CompiledExpression}
 import pl.touk.nussknacker.engine.api.typed.CustomNodeValidationException
-import pl.touk.nussknacker.engine.api.{Context, MetaData, ProcessListener, ValueWithContext}
-import pl.touk.nussknacker.engine.api.NodeId
+import pl.touk.nussknacker.engine.api._
+import pl.touk.nussknacker.engine.compiledgraph.{BaseCompiledParameter, CompiledParameter}
+import pl.touk.nussknacker.engine.util.Implicits.RichScalaMap
 import pl.touk.nussknacker.engine.variables.GlobalVariablesPreparer
 
+import java.util.Optional
+import java.util.concurrent.atomic.AtomicReference
 import scala.util.control.NonFatal
-import pl.touk.nussknacker.engine.util.Implicits.RichScalaMap
 
 /* We have 3 different places where expressions can be evaluated:
   - Interpreter - evaluation of service parameters and variable definitions
   - CompilerLazyInterpreter - evaluation of parameters of CustomStreamTransformers
-  - ProcessObjectFactory - evaluation of exceptionHandler, source and sink parameters
+  - ComponentExecutorFactory - evaluation of eager parameters for all components that are Executor's factories and for ExceptionHandler
   They are evaluated with different contexts - e.g. in interpreter we can use process variables, but in source/sink we can use only global ones.
  */
 object ExpressionEvaluator {
@@ -22,33 +22,30 @@ object ExpressionEvaluator {
   def optimizedEvaluator(
       globalVariablesPreparer: GlobalVariablesPreparer,
       listeners: Seq[ProcessListener],
-      metaData: MetaData
   ): ExpressionEvaluator = {
-    new ExpressionEvaluator(globalVariablesPreparer, listeners, Some(metaData))
+    new ExpressionEvaluator(globalVariablesPreparer, listeners, cacheGlobalVariables = true)
   }
 
   // This is for evaluation expressions fixed expressions during object creation *and* during tests/service queries
   // Should *NOT* be used for evaluating expressions on events in *production*
   def unOptimizedEvaluator(globalVariablesPreparer: GlobalVariablesPreparer) =
-    new ExpressionEvaluator(globalVariablesPreparer, Nil, None)
-
-  def unOptimizedEvaluator(modelData: ModelData): ExpressionEvaluator =
-    unOptimizedEvaluator(GlobalVariablesPreparer(modelData.modelDefinition.expressionConfig))
+    new ExpressionEvaluator(globalVariablesPreparer, Nil, cacheGlobalVariables = false)
 
 }
 
 class ExpressionEvaluator(
     globalVariablesPreparer: GlobalVariablesPreparer,
     listeners: Seq[ProcessListener],
-    metaDataToUse: Option[MetaData]
+    cacheGlobalVariables: Boolean
 ) {
   private def prepareGlobals(metaData: MetaData): Map[String, Any] =
     globalVariablesPreparer.prepareGlobalVariables(metaData).mapValuesNow(_.obj)
 
-  private val optimizedGlobals = metaDataToUse.map(prepareGlobals)
+  // We have an assumption, that ExpressionEvaluator will be used only with the same scenario
+  private val optimizedGlobals: AtomicReference[Option[Map[String, Any]]] = new AtomicReference(None)
 
   def evaluateParameters(
-      params: List[pl.touk.nussknacker.engine.compiledgraph.evaluatedparam.Parameter],
+      params: List[CompiledParameter],
       ctx: Context
   )(implicit nodeId: NodeId, metaData: MetaData): (Context, Map[String, AnyRef]) = {
     val (newCtx, evaluatedParams) = params.foldLeft((ctx, List.empty[(String, AnyRef)])) {
@@ -57,12 +54,12 @@ class ExpressionEvaluator(
         val newAccParams             = (param.name -> valueWithModifiedContext.value) :: accParams
         (valueWithModifiedContext.context, newAccParams)
     }
-    // hopefully peformance will be a bit improved with https://github.com/scala/scala/pull/7118
+    // hopefully performance will be a bit improved with https://github.com/scala/scala/pull/7118
     (newCtx, evaluatedParams.toMap)
   }
 
   def evaluateParameter(
-      param: pl.touk.nussknacker.engine.compiledgraph.evaluatedparam.Parameter,
+      param: BaseCompiledParameter,
       ctx: Context
   )(implicit nodeId: NodeId, metaData: MetaData): ValueWithContext[AnyRef] = {
     try {
@@ -80,10 +77,20 @@ class ExpressionEvaluator(
     }
   }
 
-  def evaluate[R](expr: Expression, expressionId: String, nodeId: String, ctx: Context)(
+  def evaluate[R](expr: CompiledExpression, expressionId: String, nodeId: String, ctx: Context)(
       implicit metaData: MetaData
   ): ValueWithContext[R] = {
-    val globalVariables = optimizedGlobals.getOrElse(prepareGlobals(metaData))
+    val globalVariables = if (cacheGlobalVariables) {
+      optimizedGlobals
+        .updateAndGet { initializedVariablesOpt =>
+          Some(initializedVariablesOpt.getOrElse(prepareGlobals(metaData)))
+        }
+        .getOrElse {
+          throw new IllegalStateException("Optimized global variables not initialized")
+        }
+    } else {
+      prepareGlobals(metaData)
+    }
 
     val value = expr.evaluate[R](ctx, globalVariables)
     listeners.foreach(_.expressionEvaluated(nodeId, expressionId, expr.original, ctx, metaData, value))

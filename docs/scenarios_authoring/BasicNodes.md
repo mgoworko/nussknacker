@@ -35,18 +35,18 @@ Note that internally Nussknacker converts JSON’s object into SpEL’s map.
 ![alt_text](../autoScreenshotChangeDocs/Auto_Screenshot_Change_Docs_-_basic_components_-_variable2.png "Screenshot_tooltip")
 
 &nbsp;
-## MapVariable
+## RecordVariable
 
-The specialized `mapVariable` component can be used to declare a map variable (object in JSON)
+The specialized `record-variable` component can be used to declare a record variable (object in JSON)
 
 
-![alt_text](../autoScreenshotChangeDocs/Auto_Screenshot_Change_Docs_-_basic_components_-_mapmariable0.png "mapVariable form")
+![alt_text](../autoScreenshotChangeDocs/Auto_Screenshot_Change_Docs_-_basic_components_-_mapmariable0.png "record-variable form")
 
 
 The same can be achieved using a plain `Variable` component, just make sure to write a valid SpEL expression.
 
 
-![alt_text](../autoScreenshotChangeDocs/Auto_Screenshot_Change_Docs_-_basic_components_-_mapmariable1.png "mapVariable declaration using a plan Variable component")
+![alt_text](../autoScreenshotChangeDocs/Auto_Screenshot_Change_Docs_-_basic_components_-_mapmariable1.png "record-variable declaration using a plan Variable component")
 
 &nbsp;
 ## Filter
@@ -130,7 +130,7 @@ Example:
 
 Entry fields:
 - Output Variable Name - the name of the variable containing results of the merge (replacing previously defined variables, in particular #input).
-- Output Expression - there is one expression for each of the input branches. When there is an incoming event from a particular input branch, the expression defined for that branch is evaluated and passed to the output branch.
+- Output Expression - there is one expression for each of the input branches. When there is an incoming event from a particular input branch, the expression defined for that branch is evaluated and passed to the output branch. The expressions defined for respective branches need to be of identical data type. In the example above it is always a record containing fields `branchName` and `value`.
 
-Please note, that the #input variable used in the Output expression field refers to the content of the respective incoming branch.
+Note, that the #input variable used in the Output expression field refers to the content of the respective incoming branch.
 

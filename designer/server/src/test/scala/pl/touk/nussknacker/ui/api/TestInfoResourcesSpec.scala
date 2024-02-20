@@ -9,7 +9,7 @@ import org.apache.commons.lang3.StringUtils
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import pl.touk.nussknacker.engine.api.definition.Parameter
-import pl.touk.nussknacker.engine.api.displayedgraph.DisplayableProcess
+import pl.touk.nussknacker.engine.api.graph.ScenarioGraph
 import pl.touk.nussknacker.engine.api.test.ScenarioTestData
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.definition.test.{
@@ -18,10 +18,13 @@ import pl.touk.nussknacker.engine.definition.test.{
   TestInfoProvider,
   TestingCapabilities
 }
+import pl.touk.nussknacker.security.Permission
 import pl.touk.nussknacker.test.{EitherValuesDetailedMessage, PatientScalaFutures}
-import pl.touk.nussknacker.ui.api.helpers.TestCategories.Category1
-import pl.touk.nussknacker.ui.api.helpers.TestFactory.{mapProcessingTypeDataProvider, posting, withPermissions}
-import pl.touk.nussknacker.ui.api.helpers.{NuResourcesTest, ProcessTestData}
+import pl.touk.nussknacker.test.utils.domain.TestFactory.{mapProcessingTypeDataProvider, withPermissions}
+import pl.touk.nussknacker.test.base.it.NuResourcesTest
+import pl.touk.nussknacker.test.config.WithSimplifiedDesignerConfig.TestProcessingType.Streaming
+import pl.touk.nussknacker.test.utils.domain.ProcessTestData
+import pl.touk.nussknacker.test.utils.scalas.AkkaHttpExtensions.toRequestEntity
 
 class TestInfoResourcesSpec
     extends AnyFunSuite
@@ -32,7 +35,8 @@ class TestInfoResourcesSpec
     with PatientScalaFutures
     with EitherValuesDetailedMessage {
 
-  private val process: DisplayableProcess = ProcessTestData.sampleDisplayableProcess.copy(category = Category1)
+  private val scenarioGraph: ScenarioGraph = ProcessTestData.sampleScenarioGraph
+  private val testPermissionAll            = List(Permission.Deploy, Permission.Read, Permission.Write)
 
   private def testInfoProvider(additionalDataSize: Int) = new TestInfoProvider {
 
@@ -65,12 +69,20 @@ class TestInfoResourcesSpec
   private def route(additionalDataSize: Int = 0) = new TestInfoResources(
     processAuthorizer,
     processService,
-    createScenarioTestService(mapProcessingTypeDataProvider("streaming" -> testInfoProvider(additionalDataSize)))
+    mapProcessingTypeDataProvider(
+      Streaming.stringify -> createScenarioTestService(testInfoProvider(additionalDataSize))
+    )
   )
 
   test("generates data") {
-    saveProcess(process) {
-      Post("/testInfo/generate/5", posting.toEntity(process)) ~> withPermissions(route(), testPermissionAll) ~> check {
+    saveProcess(scenarioGraph) {
+      Post(
+        s"/testInfo/${ProcessTestData.sampleProcessName}/generate/5",
+        scenarioGraph.toJsonRequestEntity()
+      ) ~> withPermissions(
+        route(),
+        testPermissionAll: _*
+      ) ~> check {
         implicit val contentUnmarshaller: FromEntityUnmarshaller[String] = Unmarshaller.stringUnmarshaller
         status shouldEqual StatusCodes.OK
         val content = responseAs[String]
@@ -80,16 +92,22 @@ class TestInfoResourcesSpec
   }
 
   test("refuses to generate too much data") {
-    saveProcess(process) {
-      Post("/testInfo/generate/100", posting.toEntity(process)) ~> withPermissions(
+    saveProcess(scenarioGraph) {
+      Post(
+        s"/testInfo/${ProcessTestData.sampleProcessName}/generate/100",
+        scenarioGraph.toJsonRequestEntity()
+      ) ~> withPermissions(
         route(),
-        testPermissionAll
+        testPermissionAll: _*
       ) ~> check {
         status shouldEqual StatusCodes.BadRequest
       }
-      Post("/testInfo/generate/1", posting.toEntity(process)) ~> withPermissions(
+      Post(
+        s"/testInfo/${ProcessTestData.sampleProcessName}/generate/1",
+        scenarioGraph.toJsonRequestEntity()
+      ) ~> withPermissions(
         route(additionalDataSize = 20000),
-        testPermissionAll
+        testPermissionAll: _*
       ) ~> check {
         status shouldEqual StatusCodes.BadRequest
       }
@@ -97,10 +115,13 @@ class TestInfoResourcesSpec
   }
 
   test("get full capabilities when user has deploy role") {
-    saveProcess(process) {
-      Post("/testInfo/capabilities", posting.toEntity(process)) ~> withPermissions(
+    saveProcess(scenarioGraph) {
+      Post(
+        s"/testInfo/${ProcessTestData.sampleProcessName}/capabilities",
+        scenarioGraph.toJsonRequestEntity()
+      ) ~> withPermissions(
         route(),
-        testPermissionAll
+        testPermissionAll: _*
       ) ~> check {
         status shouldEqual StatusCodes.OK
         val entity = entityAs[Json]
@@ -111,10 +132,13 @@ class TestInfoResourcesSpec
   }
 
   test("get empty capabilities when user hasn't got deploy role") {
-    saveProcess(process) {
-      Post("/testInfo/capabilities", posting.toEntity(process)) ~> withPermissions(
+    saveProcess(scenarioGraph) {
+      Post(
+        s"/testInfo/${ProcessTestData.sampleProcessName}/capabilities",
+        scenarioGraph.toJsonRequestEntity()
+      ) ~> withPermissions(
         route(),
-        testPermissionEmpty
+        Permission.Read
       ) ~> check {
         status shouldEqual StatusCodes.OK
         val entity = entityAs[Json]

@@ -26,7 +26,9 @@ case class KafkaConfig(
     useStringForKey: Boolean = true,
     schemaRegistryCacheConfig: SchemaRegistryCacheConfig = SchemaRegistryCacheConfig(),
     avroAsJsonSerialization: Option[Boolean] = None,
-    kafkaAddress: Option[String] = None
+    kafkaAddress: Option[String] = None,
+    // TODO: remove this feature flag in future release
+    useNamingStrategyForConsumerGroupId: Boolean = true
 ) {
 
   def schemaRegistryClientKafkaConfig = SchemaRegistryClientKafkaConfig(
@@ -48,6 +50,7 @@ case class KafkaConfig(
 }
 
 object ConsumerGroupNamingStrategy extends Enumeration {
+  // TODO: Rename to processName and processName-nodeName
   val ProcessId: ConsumerGroupNamingStrategy.Value       = Value("processId")
   val ProcessIdNodeId: ConsumerGroupNamingStrategy.Value = Value("processId-nodeId")
 }
@@ -59,8 +62,7 @@ object KafkaConfig {
   import net.ceedubs.ficus.readers.EnumerationReader._
   import TopicsExistenceValidationConfig._
 
-  val lowLevelComponentsEnabled: Boolean = false
-  val defaultGlobalKafkaConfigPath       = "kafka"
+  val defaultGlobalKafkaConfigPath = "kafka"
 
   def parseConfigOpt(config: Config, path: String = defaultGlobalKafkaConfigPath): Option[KafkaConfig] = {
     config.getAs[KafkaConfig](path)

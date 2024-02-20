@@ -1,26 +1,22 @@
-import { connect } from "react-redux";
-import { compose } from "redux";
 import * as LayoutUtils from "../../reducers/layoutUtils";
 import GraphWrapped from "./GraphWrapped";
-import { injectNode, layoutChanged, nodeAdded, nodesConnected, nodesDisconnected, resetSelection, toggleSelection } from "../../actions/nk";
+import React, { forwardRef } from "react";
+import { Graph } from "./Graph";
+import { GraphProps } from "./types";
 
-const mapFragmentState = (state, props) => ({
-    // TODO: for process its in redux, for fragment here. find some consistent place
-    layout: LayoutUtils.fromMeta(props.processToDisplay),
-    divId: `nk-graph-fragment`,
-    readonly: true,
-    isFragment: true,
-    nodeSelectionEnabled: false,
-});
-
-export const fragmentGraph = compose(
-    connect(mapFragmentState, {
-        nodesConnected,
-        nodesDisconnected,
-        layoutChanged,
-        injectNode,
-        nodeAdded,
-        resetSelection,
-        toggleSelection,
-    }),
-)(GraphWrapped);
+export const FragmentGraphPreview = forwardRef<Graph, Pick<GraphProps, "processCounts" | "scenario" | "nodeIdPrefixForFragmentTests">>(
+    function FragmentGraphPreview({ processCounts, scenario, nodeIdPrefixForFragmentTests }, ref) {
+        return (
+            <GraphWrapped
+                ref={ref}
+                processCounts={processCounts}
+                scenario={scenario}
+                nodeIdPrefixForFragmentTests={nodeIdPrefixForFragmentTests}
+                layout={LayoutUtils.fromMeta(scenario.scenarioGraph)}
+                readonly
+                divId="nk-graph-fragment"
+                isFragment
+            />
+        );
+    },
+);

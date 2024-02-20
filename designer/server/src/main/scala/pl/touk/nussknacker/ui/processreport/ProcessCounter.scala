@@ -2,14 +2,18 @@ package pl.touk.nussknacker.ui.processreport
 
 import cats.data.NonEmptyList
 import io.circe.generic.JsonCodec
+import pl.touk.nussknacker.engine.api.process.ProcessName
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.canonicalgraph.canonicalnode._
 import pl.touk.nussknacker.engine.graph.node.{BranchEndData, FragmentInputDefinition}
 import pl.touk.nussknacker.ui.process.fragment.FragmentRepository
+import pl.touk.nussknacker.ui.security.api.LoggedUser
 
 class ProcessCounter(fragmentRepository: FragmentRepository) {
 
-  def computeCounts(canonicalProcess: CanonicalProcess, counts: String => Option[RawCount]): Map[String, NodeCount] = {
+  def computeCounts(canonicalProcess: CanonicalProcess, isFragment: Boolean, counts: String => Option[RawCount])(
+      implicit user: LoggedUser
+  ): Map[String, NodeCount] = {
 
     def computeCounts(prefixes: List[String])(nodes: NonEmptyList[Iterable[CanonicalNode]]): Map[String, NodeCount] = {
       nodes
@@ -35,7 +39,7 @@ class ProcessCounter(fragmentRepository: FragmentRepository) {
       nodes.flatMap {
         // TODO: this is a bit of a hack. Metric for fragment input is counted in node with fragment occurrence id...
         // We want to count it though while testing fragments
-        case FlatNode(FragmentInputDefinition(id, _, _)) if !canonicalProcess.metaData.isFragment =>
+        case FlatNode(FragmentInputDefinition(id, _, _)) if !isFragment =>
           Map(id -> nodeCountOption(None))
         // BranchEndData is kind of artificial entity
         case FlatNode(BranchEndData(_))  => Map.empty[String, NodeCount]
@@ -48,7 +52,7 @@ class ProcessCounter(fragmentRepository: FragmentRepository) {
         case SplitNode(node, nexts)  => computeCountsSamePrefixes(nexts.flatten) + (node.id -> nodeCount(node.id))
         case Fragment(node, outputs) =>
           // TODO: validate that process exists
-          val fragment = getFragment(node.ref.id).get
+          val fragment = fragmentRepository.fetchLatestFragmentSync(ProcessName(node.ref.id)).get
           computeCountsSamePrefixes(outputs.values.flatten) + (node.id -> nodeCount(
             node.id,
             computeCounts(prefixes :+ node.id)(fragment.allStartNodes)
@@ -58,10 +62,6 @@ class ProcessCounter(fragmentRepository: FragmentRepository) {
     }
 
     computeCounts(List())(canonicalProcess.allStartNodes)
-  }
-
-  private def getFragment(fragmentId: String): Option[CanonicalProcess] = {
-    fragmentRepository.get(fragmentId).map(_.canonical)
   }
 
 }

@@ -11,7 +11,7 @@ import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.CustomNode
 import pl.touk.nussknacker.engine.api.definition.{DualParameterEditor, Parameter, StringParameterEditor}
 import pl.touk.nussknacker.engine.api.editor.DualEditorMode
 import pl.touk.nussknacker.engine.api.typed.typing
-import pl.touk.nussknacker.engine.definition.parameter.StandardParameterEnrichment
+import pl.touk.nussknacker.engine.definition.component.parameter.StandardParameterEnrichment
 import pl.touk.nussknacker.engine.graph.expression.Expression
 import pl.touk.nussknacker.engine.schemedkafka.KafkaUniversalComponentTransformer.{
   SchemaVersionParamName,
@@ -68,7 +68,7 @@ class AvroSchemaBasedParameterTest extends AnyFunSuite with Matchers {
       .asInstanceOf[SchemaBasedRecordParameter]
     StandardParameterEnrichment.enrichParameterDefinitions(
       result.toParameters,
-      SingleComponentConfig.zero
+      Map.empty
     ) shouldBe List(
       Parameter(name = "a", typ = typing.Typed[String]).copy(
         isLazyParameter = true,
@@ -96,7 +96,7 @@ class AvroSchemaBasedParameterTest extends AnyFunSuite with Matchers {
       .asInstanceOf[SingleSchemaBasedParameter]
     StandardParameterEnrichment.enrichParameterDefinitions(
       result.toParameters,
-      SingleComponentConfig.zero
+      Map.empty
     ) shouldBe List(
       Parameter(name = SinkValueParamName, typ = typing.Typed[Long])
         .copy(isLazyParameter = true, defaultValue = Some(Expression.spel("0")))

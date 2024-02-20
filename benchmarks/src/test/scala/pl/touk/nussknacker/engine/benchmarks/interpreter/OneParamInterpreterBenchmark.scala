@@ -4,10 +4,12 @@ import cats.effect.IO
 import org.openjdk.jmh.annotations._
 import pl.touk.nussknacker.engine.Interpreter.FutureShape
 import pl.touk.nussknacker.engine.api._
+import pl.touk.nussknacker.engine.api.component.ComponentDefinition
+import pl.touk.nussknacker.engine.api.process.ServiceExecutionContext
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.spel.Implicits._
-import pl.touk.nussknacker.engine.util.SynchronousExecutionContext
+import pl.touk.nussknacker.engine.util.SynchronousExecutionContextAndIORuntime
 
 import java.util.concurrent.TimeUnit
 import scala.concurrent.duration._
@@ -34,43 +36,50 @@ class OneParamInterpreterBenchmark {
 
   private val service = new OneParamService(instantlyCompletedFuture)
 
-  private val interpreterFuture = new InterpreterSetup[String]
-    .sourceInterpretation[Future](process, Map("service" -> service), Nil)(
-      new FutureShape()(SynchronousExecutionContext.ctx)
+  private val interpreterFuture = {
+    implicit val ec: ExecutionContext = SynchronousExecutionContextAndIORuntime.syncEc
+    new InterpreterSetup[String].sourceInterpretation[Future](process, List(ComponentDefinition("service", service)))
+  }
+
+  private val interpreterIO =
+    new InterpreterSetup[String].sourceInterpretation[IO](process, List(ComponentDefinition("service", service)))
+
+  @Benchmark
+  @BenchmarkMode(Array(Mode.Throughput))
+  @OutputTimeUnit(TimeUnit.SECONDS)
+  def benchmarkFutureSyncService(): AnyRef = {
+    Await.result(
+      interpreterFuture(Context(""), ServiceExecutionContext(SynchronousExecutionContextAndIORuntime.syncEc)),
+      1 second
     )
-
-  private val interpreterIO = new InterpreterSetup[String]
-    .sourceInterpretation[IO](process, Map("service" -> service), Nil)
-
-  private val interpreterFutureAsync = new InterpreterSetup[String]
-    .sourceInterpretation[Future](process, Map("service" -> service), Nil)(new FutureShape()(ExecutionContext.global))
-
-  @Benchmark
-  @BenchmarkMode(Array(Mode.Throughput))
-  @OutputTimeUnit(TimeUnit.SECONDS)
-  def benchmarkFutureSync(): AnyRef = {
-    Await.result(interpreterFuture(Context(""), SynchronousExecutionContext.ctx), 1 second)
   }
 
   @Benchmark
   @BenchmarkMode(Array(Mode.Throughput))
   @OutputTimeUnit(TimeUnit.SECONDS)
-  def benchmarkFutureAsync(): AnyRef = {
-    Await.result(interpreterFutureAsync(Context(""), ExecutionContext.Implicits.global), 1 second)
+  def benchmarkFutureAsyncService(): AnyRef = {
+    Await.result(
+      interpreterFuture(Context(""), ServiceExecutionContext(ExecutionContext.global)),
+      1 second
+    )
   }
 
   @Benchmark
   @BenchmarkMode(Array(Mode.Throughput))
   @OutputTimeUnit(TimeUnit.SECONDS)
-  def benchmarkSyncIO(): AnyRef = {
-    interpreterIO(Context(""), SynchronousExecutionContext.ctx).unsafeRunSync()
+  def benchmarkIOSyncService(): AnyRef = {
+    import SynchronousExecutionContextAndIORuntime.syncIoRuntime
+    interpreterIO(Context(""), ServiceExecutionContext(SynchronousExecutionContextAndIORuntime.syncEc))
+      .unsafeRunSync()
   }
 
   @Benchmark
   @BenchmarkMode(Array(Mode.Throughput))
   @OutputTimeUnit(TimeUnit.SECONDS)
-  def benchmarkAsyncIO(): AnyRef = {
-    interpreterIO(Context(""), ExecutionContext.Implicits.global).unsafeRunSync()
+  def benchmarkIOAsyncService(): AnyRef = {
+    import SynchronousExecutionContextAndIORuntime.syncIoRuntime
+    interpreterIO(Context(""), ServiceExecutionContext(ExecutionContext.global))
+      .unsafeRunSync()
   }
 
 }

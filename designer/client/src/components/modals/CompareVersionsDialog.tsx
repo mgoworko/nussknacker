@@ -8,7 +8,7 @@ import { WindowContent } from "../../windowManager";
 import { formatAbsolutely } from "../../common/DateUtils";
 import { flattenObj, objectDiff } from "../../common/JsonUtils";
 import HttpService from "../../http/HttpService";
-import { getProcessId, getProcessVersionId, getVersions } from "../../reducers/selectors/graph";
+import { getProcessName, getProcessVersionId, getVersions } from "../../reducers/selectors/graph";
 import { getTargetEnvironmentId } from "../../reducers/selectors/settings";
 import EdgeDetailsContent from "../graph/node-modal/edge/EdgeDetailsContent";
 import { ProcessVersionType } from "../Process/types";
@@ -16,7 +16,8 @@ import { SelectNodeWithFocus } from "../withFocus";
 import { NodeDetailsContent } from "../graph/node-modal/NodeDetailsContent";
 import { PathsToMarkProvider } from "../graph/node-modal/PathsToMark";
 import { NodeType } from "../../types";
-import { CompareContainer, CompareModal, FormRow, VersionHeader } from "./Styled";
+import { CompareContainer, CompareModal, VersionHeader } from "./Styled";
+import { FormControl, FormLabel } from "@mui/material";
 
 interface State {
     currentDiffId: string;
@@ -35,18 +36,18 @@ const VersionsForm = () => {
     };
 
     const [state, setState] = useState<State>(initState);
-    const processId = useSelector(getProcessId);
+    const processName = useSelector(getProcessName);
     const version = useSelector(getProcessVersionId);
     const otherEnvironment = useSelector(getTargetEnvironmentId);
     const versions = useSelector(getVersions);
 
     useEffect(() => {
-        if (processId && otherEnvironment) {
-            HttpService.fetchRemoteVersions(processId).then((response) =>
+        if (processName && otherEnvironment) {
+            HttpService.fetchRemoteVersions(processName).then((response) =>
                 setState((prevState) => ({ ...prevState, remoteVersions: response.data || [] })),
             );
         }
-    }, [processId, otherEnvironment]);
+    }, [processName, otherEnvironment]);
 
     function isLayoutChangeOnly(diffId: string): boolean {
         const { type, currentNode, otherNode } = state.difference[diffId];
@@ -57,7 +58,7 @@ const VersionsForm = () => {
 
     const loadVersion = (versionId: string) => {
         if (versionId) {
-            HttpService.compareProcesses(processId, version, versionToPass(versionId), isRemote(versionId)).then((response) =>
+            HttpService.compareProcesses(processName, version, versionToPass(versionId), isRemote(versionId)).then((response) =>
                 setState((prevState) => ({ ...prevState, difference: response.data, otherVersion: versionId, currentDiffId: null })),
             );
         } else {
@@ -159,8 +160,8 @@ const VersionsForm = () => {
 
     return (
         <>
-            <FormRow>
-                <p>Version to compare</p>
+            <FormControl>
+                <FormLabel>Version to compare</FormLabel>
                 <SelectNodeWithFocus
                     autoFocus={true}
                     id="otherVersion"
@@ -174,11 +175,11 @@ const VersionsForm = () => {
                         .map((version) => createVersionElement(version))}
                     {state.remoteVersions.map((version) => createVersionElement(version, remotePrefix))}
                 </SelectNodeWithFocus>
-            </FormRow>
+            </FormControl>
             {state.otherVersion ? (
                 <div>
-                    <FormRow>
-                        <p>Difference to pick</p>
+                    <FormControl>
+                        <FormLabel>Difference to pick</FormLabel>
                         <SelectNodeWithFocus
                             id="differentVersion"
                             className="selectNode"
@@ -195,7 +196,7 @@ const VersionsForm = () => {
                                 );
                             })}
                         </SelectNodeWithFocus>
-                    </FormRow>
+                    </FormControl>
                     {state.currentDiffId ? printDiff(state.currentDiffId) : null}
                 </div>
             ) : null}

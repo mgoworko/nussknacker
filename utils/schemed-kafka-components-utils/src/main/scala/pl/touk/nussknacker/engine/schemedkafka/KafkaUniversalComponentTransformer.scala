@@ -4,16 +4,15 @@ import cats.data.Validated.{Invalid, Valid}
 import cats.data.Writer
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.CustomNodeError
-import pl.touk.nussknacker.engine.api.context.transformation.{
-  DefinedEagerParameter,
-  SingleInputGenericNodeTransformation
-}
+import pl.touk.nussknacker.engine.api.context.transformation.{DefinedEagerParameter, SingleInputDynamicComponent}
 import pl.touk.nussknacker.engine.api.definition.{FixedExpressionValue, FixedValuesParameterEditor, Parameter}
 import pl.touk.nussknacker.engine.api.process.ProcessObjectDependencies
 import pl.touk.nussknacker.engine.schemedkafka.KafkaUniversalComponentTransformer.TopicParamName
 import pl.touk.nussknacker.engine.schemedkafka.schemaregistry._
-import pl.touk.nussknacker.engine.api.NodeId
+import pl.touk.nussknacker.engine.api.{NodeId, Params}
 import pl.touk.nussknacker.engine.api.validation.ValidationMode
+import FixedExpressionValue.nullFixedValue
+import pl.touk.nussknacker.engine.api.component.Component
 import pl.touk.nussknacker.engine.kafka.validator.WithCachedTopicsExistenceValidator
 import pl.touk.nussknacker.engine.kafka.{KafkaComponentsUtils, KafkaConfig, PreparedKafkaTopic}
 import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.universal.UniversalSchemaSupportDispatcher
@@ -32,32 +31,29 @@ object KafkaUniversalComponentTransformer {
 }
 
 trait KafkaUniversalComponentTransformer[T]
-    extends SingleInputGenericNodeTransformation[T]
-    with WithCachedTopicsExistenceValidator {
-
-  // Initially we don't want to select concrete topic by user so we add null topic on the beginning of select box.
-  // TODO: add addNullOption feature flag to FixedValuesParameterEditor
-  val nullTopicOption: FixedExpressionValue = FixedExpressionValue("", "")
+    extends SingleInputDynamicComponent[T]
+    with WithCachedTopicsExistenceValidator { self: Component =>
 
   type WithError[V] = Writer[List[ProcessCompilationError], V]
 
   def schemaRegistryClientFactory: SchemaRegistryClientFactory
 
-  def processObjectDependencies: ProcessObjectDependencies
+  def modelDependencies: ProcessObjectDependencies
 
   @transient protected lazy val schemaRegistryClient: SchemaRegistryClient =
     schemaRegistryClientFactory.create(kafkaConfig)
 
   protected def topicSelectionStrategy: TopicSelectionStrategy = new AllTopicsSelectionStrategy
 
-  protected val kafkaConfig: KafkaConfig = prepareKafkaConfig
+  @transient protected lazy val kafkaConfig: KafkaConfig = prepareKafkaConfig
 
-  protected val schemaSupportDispatcher: UniversalSchemaSupportDispatcher = UniversalSchemaSupportDispatcher(
-    kafkaConfig
-  )
+  @transient protected lazy val schemaSupportDispatcher: UniversalSchemaSupportDispatcher =
+    UniversalSchemaSupportDispatcher(
+      kafkaConfig
+    )
 
   protected def prepareKafkaConfig: KafkaConfig = {
-    KafkaConfig.parseConfig(processObjectDependencies.config)
+    KafkaConfig.parseConfig(modelDependencies.config)
   }
 
   protected def getTopicParam(implicit nodeId: NodeId): WithError[Parameter] = {
@@ -79,11 +75,10 @@ trait KafkaUniversalComponentTransformer[T]
     Parameter[String](topicParamName).copy(editor =
       Some(
         FixedValuesParameterEditor(
-          nullTopicOption +: topics
-            .flatMap(topic =>
-              processObjectDependencies.objectNaming
-                .decodeName(topic, processObjectDependencies.config, KafkaComponentsUtils.KafkaTopicUsageKey)
-            )
+          // Initially we don't want to select concrete topic by user so we add null topic on the beginning of select box.
+          // TODO: add addNullOption feature flag to FixedValuesParameterEditor
+          nullFixedValue +: topics
+            .flatMap(topic => modelDependencies.namingStrategy.decodeName(topic))
             .sorted
             .map(v => FixedExpressionValue(s"'$v'", v))
         )
@@ -112,12 +107,11 @@ trait KafkaUniversalComponentTransformer[T]
       .copy(editor = Some(FixedValuesParameterEditor(versionValues)))
   }
 
-  protected def extractPreparedTopic(params: Map[String, Any]): PreparedKafkaTopic = prepareTopic(
-    params(topicParamName).asInstanceOf[String]
-  )
+  protected def extractPreparedTopic(params: Params): PreparedKafkaTopic =
+    prepareTopic(params.extractUnsafe(topicParamName))
 
   protected def prepareTopic(topic: String): PreparedKafkaTopic =
-    KafkaComponentsUtils.prepareKafkaTopic(topic, processObjectDependencies)
+    KafkaComponentsUtils.prepareKafkaTopic(topic, modelDependencies)
 
   protected def parseVersionOption(versionOptionName: String): SchemaVersionOption =
     SchemaVersionOption.byName(versionOptionName)
@@ -151,13 +145,13 @@ trait KafkaUniversalComponentTransformer[T]
     new ParsedSchemaDeterminer(schemaRegistryClient, preparedTopic.prepared, LatestSchemaVersion, isKey = true)
   }
 
-  protected def topicParamStep(implicit nodeId: NodeId): NodeTransformationDefinition = {
+  protected def topicParamStep(implicit nodeId: NodeId): ContextTransformationDefinition = {
     case TransformationStep(Nil, _) =>
       val topicParam = getTopicParam.map(List(_))
       NextParameters(parameters = topicParam.value, errors = topicParam.written)
   }
 
-  protected def schemaParamStep(implicit nodeId: NodeId): NodeTransformationDefinition = {
+  protected def schemaParamStep(implicit nodeId: NodeId): ContextTransformationDefinition = {
     case TransformationStep((topicParamName, DefinedEagerParameter(topic: String, _)) :: Nil, _) =>
       val preparedTopic = prepareTopic(topic)
       val versionParam  = getVersionParam(preparedTopic)
@@ -174,9 +168,9 @@ trait KafkaUniversalComponentTransformer[T]
   def paramsDeterminedAfterSchema: List[Parameter]
 
   // edge case - for some reason Topic is not defined
-  protected val fallbackVersionOptionParam: Parameter = getVersionParam(Nil)
+  @transient protected lazy val fallbackVersionOptionParam: Parameter = getVersionParam(Nil)
 
   // override it if you use other parameter name for topic
-  protected val topicParamName: String = TopicParamName
+  @transient protected lazy val topicParamName: String = TopicParamName
 
 }

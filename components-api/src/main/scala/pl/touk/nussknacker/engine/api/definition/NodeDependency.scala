@@ -1,7 +1,5 @@
 package pl.touk.nussknacker.engine.api.definition
 
-import cats.instances.list._
-import cats.syntax.traverse._
 import pl.touk.nussknacker.engine.api.context.transformation.{
   NodeDependencyValue,
   OutputVariableNameValue,
@@ -18,7 +16,7 @@ import scala.reflect.runtime.universe._
 sealed trait NodeDependency
 
 /**
- * This trait reduce boilerplate defining `GenericNodeTransformation` and reduce risk that definition of node dependencies
+ * This trait reduce boilerplate defining `DynamicComponent` and reduce risk that definition of node dependencies
  * will desynchronize with implementation code using values
  */
 trait ValueExtractor { self: NodeDependency =>
@@ -80,7 +78,8 @@ object Parameter {
       isLazyParameter = false,
       scalaOptionParameter = false,
       javaOptionalParameter = false,
-      hintText = None
+      hintText = None,
+      labelOpt = None
     )
 
   def optional[T: TypeTag: NotNothing](name: String): Parameter =
@@ -101,7 +100,8 @@ object Parameter {
       isLazyParameter = false,
       scalaOptionParameter = false,
       javaOptionalParameter = false,
-      hintText = None
+      hintText = None,
+      labelOpt = None
     )
 
 }
@@ -113,6 +113,12 @@ object NotBlankParameter {
 
 }
 
+// This class is currently a part of the component API but also used as our domain model class
+// Because of that some fields like editor, defaultValue, labelOpt are optional but eventually in the domain
+// model their will be determined - see StandardParameterEnrichment and label method
+// Also some fields like scalaOptionParameter and javaOptionalParameter are only necessary in the method-based
+// component's context, so it could be removed from the API
+// TODO: extract Parameter class in the domain model (see ComponentDefinitionWithImplementation and belongings)
 case class Parameter(
     name: String,
     typ: TypingResult,
@@ -125,8 +131,133 @@ case class Parameter(
     isLazyParameter: Boolean,
     scalaOptionParameter: Boolean,
     javaOptionalParameter: Boolean,
-    hintText: Option[String] = None
+    hintText: Option[String],
+    labelOpt: Option[String],
 ) extends NodeDependency {
+
+  def copy(
+      name: String,
+      typ: TypingResult,
+      editor: Option[ParameterEditor],
+      validators: List[ParameterValidator],
+      defaultValue: Option[Expression],
+      additionalVariables: Map[String, AdditionalVariable],
+      variablesToHide: Set[String],
+      branchParam: Boolean,
+      isLazyParameter: Boolean,
+      scalaOptionParameter: Boolean,
+      javaOptionalParameter: Boolean,
+  ): Parameter = {
+    copy(
+      name,
+      typ,
+      editor,
+      validators,
+      defaultValue,
+      additionalVariables,
+      variablesToHide,
+      branchParam,
+      isLazyParameter,
+      scalaOptionParameter,
+      javaOptionalParameter,
+      hintText = None,
+      labelOpt = None
+    )
+  }
+
+  def copy(
+      name: String = this.name,
+      typ: TypingResult = this.typ,
+      editor: Option[ParameterEditor] = this.editor,
+      validators: List[ParameterValidator] = this.validators,
+      defaultValue: Option[Expression] = this.defaultValue,
+      additionalVariables: Map[String, AdditionalVariable] = this.additionalVariables,
+      variablesToHide: Set[String] = this.variablesToHide,
+      branchParam: Boolean = this.branchParam,
+      isLazyParameter: Boolean = this.isLazyParameter,
+      scalaOptionParameter: Boolean = this.scalaOptionParameter,
+      javaOptionalParameter: Boolean = this.javaOptionalParameter,
+      hintText: Option[String] = this.hintText,
+      labelOpt: Option[String] = this.labelOpt,
+  ): Parameter = {
+    new Parameter(
+      name,
+      typ,
+      editor,
+      validators,
+      defaultValue,
+      additionalVariables,
+      variablesToHide,
+      branchParam,
+      isLazyParameter,
+      scalaOptionParameter,
+      javaOptionalParameter,
+      hintText,
+      labelOpt
+    )
+  }
+
+  def apply(
+      name: String,
+      typ: TypingResult,
+      editor: Option[ParameterEditor],
+      validators: List[ParameterValidator],
+      defaultValue: Option[Expression],
+      additionalVariables: Map[String, AdditionalVariable],
+      variablesToHide: Set[String],
+      branchParam: Boolean,
+      isLazyParameter: Boolean,
+      scalaOptionParameter: Boolean,
+      javaOptionalParameter: Boolean,
+      hintText: Option[String],
+      labelOpt: Option[String]
+  ): Parameter = {
+    new Parameter(
+      name,
+      typ,
+      editor,
+      validators,
+      defaultValue,
+      additionalVariables,
+      variablesToHide,
+      branchParam,
+      isLazyParameter,
+      scalaOptionParameter,
+      javaOptionalParameter,
+      hintText,
+      labelOpt
+    )
+  }
+
+  def apply(
+      name: String,
+      typ: TypingResult,
+      editor: Option[ParameterEditor],
+      validators: List[ParameterValidator],
+      defaultValue: Option[Expression],
+      additionalVariables: Map[String, AdditionalVariable],
+      variablesToHide: Set[String],
+      branchParam: Boolean,
+      isLazyParameter: Boolean,
+      scalaOptionParameter: Boolean,
+      javaOptionalParameter: Boolean,
+  ): Parameter = {
+    new Parameter(
+      name,
+      typ,
+      editor,
+      validators,
+      defaultValue,
+      additionalVariables,
+      variablesToHide,
+      branchParam,
+      isLazyParameter,
+      scalaOptionParameter,
+      javaOptionalParameter,
+      hintText = None,
+      labelOpt = None
+    )
+  }
 
   // we throw exception early, as it indicates that Component implementation is incorrect, this should not happen in running designer...
   if (isLazyParameter && additionalVariables.values.exists(_.isInstanceOf[AdditionalVariableWithFixedValue])) {
@@ -143,8 +274,18 @@ case class Parameter(
 
   val isOptional: Boolean = !validators.contains(MandatoryParameterValidator)
 
+  // TODO: all three methods below could be removed when we split this class into api class and domain model class
+  def finalEditor: ParameterEditor = editor.getOrElse(RawParameterEditor)
+
+  def finalDefaultValue: Expression = defaultValue.getOrElse(Expression.spel(""))
+
+  // We should have some convention for building the default label based on Parameter's name - e.g.
+  // names could be kebab-case and we can convert them to the Human Readable Format
+  def label: String = labelOpt getOrElse name
+
 }
 
+// TODO: rename to AdditionalVariableDefinition
 sealed trait AdditionalVariable {
   def typingResult: TypingResult
 }

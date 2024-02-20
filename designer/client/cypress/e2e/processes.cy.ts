@@ -26,7 +26,9 @@ describe("Processes list", () => {
         cy.contains(/^new scenario$/i)
             .should("be.visible")
             .click();
-        cy.get("#newProcessId", { timeout: 30000 }).type(this.processName);
+        cy.get("#newProcessName", { timeout: 30000 }).type(this.processName);
+        cy.contains(/request-response/i).click();
+        cy.get("#processCategory").select(2);
         cy.contains(/^create$/i)
             .should("be.enabled")
             .click();
@@ -71,7 +73,7 @@ describe.skip("Processes list (new table)", () => {
         cy.contains(/^new scenario$/i)
             .should("be.visible")
             .click();
-        cy.get("#newProcessId", { timeout: 30000 }).type(this.processName);
+        cy.get("#newProcessName", { timeout: 30000 }).type(this.processName);
         cy.contains(/^create$/i)
             .should("be.enabled")
             .click();

@@ -7,6 +7,7 @@ import io.circe.Json._
 import org.apache.kafka.common.record.TimestampType
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
+import pl.touk.nussknacker.engine.api.Context
 import pl.touk.nussknacker.engine.api.test.{ScenarioTestData, ScenarioTestJsonRecord}
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
@@ -31,15 +32,18 @@ import pl.touk.nussknacker.engine.util.json.BestEffortJsonEncoder
 import pl.touk.nussknacker.test.KafkaConfigProperties
 import pl.touk.nussknacker.engine.flink.util.sink.SingleValueSinkFactory.SingleValueParamName
 import pl.touk.nussknacker.engine.graph.expression.Expression
+import pl.touk.nussknacker.engine.process.helpers.TestResultsHolder
+import pl.touk.nussknacker.engine.schemedkafka.source.flink.TestWithTestDataSpec.sinkForInputMetaResultsHolder
 
 import java.util.Collections
 
 class TestWithTestDataSpec extends AnyFunSuite with Matchers with LazyLogging {
 
-  private lazy val creator: KafkaAvroTestProcessConfigCreator = new KafkaAvroTestProcessConfigCreator {
-    override protected def schemaRegistryClientFactory =
-      MockSchemaRegistryClientFactory.confluentBased(schemaRegistryMockClient)
-  }
+  private lazy val creator: KafkaAvroTestProcessConfigCreator =
+    new KafkaAvroTestProcessConfigCreator(sinkForInputMetaResultsHolder) {
+      override protected def schemaRegistryClientFactory =
+        MockSchemaRegistryClientFactory.confluentBased(schemaRegistryMockClient)
+    }
 
   private lazy val config = ConfigFactory
     .empty()
@@ -78,7 +82,7 @@ class TestWithTestDataSpec extends AnyFunSuite with Matchers with LazyLogging {
 
     val results = run(process, scenarioTestData)
 
-    val testResultVars = results.nodeResults("end").head.context.variables
+    val testResultVars = results.nodeResults("end").head.variables
     testResultVars.get("extractedTimestamp") shouldBe Some(expectedTimestamp)
     testResultVars.get("inputMeta") shouldBe Some(inputMeta)
   }
@@ -121,10 +125,10 @@ class TestWithTestDataSpec extends AnyFunSuite with Matchers with LazyLogging {
     val results          = run(fragment, scenarioTestData)
 
     results.nodeResults("fragment1") shouldBe List(
-      NodeResult(ResultContext("fragment1-fragment1-0-0", Map("in" -> "some-text-id")))
+      Context("fragment1-fragment1-0-0", Map("in" -> "some-text-id"))
     )
     results.nodeResults("fragmentEnd") shouldBe List(
-      NodeResult(ResultContext("fragment1-fragment1-0-0", Map("in" -> "some-text-id", "out" -> "some-text-id")))
+      Context("fragment1-fragment1-0-0", Map("in" -> "some-text-id", "out" -> "some-text-id"))
     )
     results.invocationResults("fragmentEnd") shouldBe List(
       ExpressionInvocationResult("fragment1-fragment1-0-0", "out", "some-text-id")
@@ -138,16 +142,21 @@ class TestWithTestDataSpec extends AnyFunSuite with Matchers with LazyLogging {
     schemaRegistryMockClient.register(subject, parsedSchema)
   }
 
-  private def run(process: CanonicalProcess, scenarioTestData: ScenarioTestData): TestResults[Any] = {
+  private def run(process: CanonicalProcess, scenarioTestData: ScenarioTestData): TestResults = {
     ThreadUtils.withThisAsContextClassLoader(getClass.getClassLoader) {
       FlinkTestMain.run(
-        LocalModelData(config, creator),
+        LocalModelData(config, List.empty, configCreator = creator),
         process,
         scenarioTestData,
-        FlinkTestConfiguration.configuration(),
-        identity
+        FlinkTestConfiguration.configuration()
       )
     }
   }
+
+}
+
+object TestWithTestDataSpec {
+
+  private val sinkForInputMetaResultsHolder = new TestResultsHolder[InputMeta[_]]
 
 }

@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import io.circe.{Decoder, Encoder}
 import pl.touk.nussknacker.engine.api.definition.ParameterEditor
 import pl.touk.nussknacker.engine.api.typed.supertype.ReturningSingleClassPromotionStrategy
+import pl.touk.nussknacker.engine.api.typed.typing.Typed
 import pl.touk.nussknacker.engine.api.{Hidden, HideToString}
 
 import java.lang.reflect.{AccessibleObject, Member, Method}
@@ -16,6 +17,7 @@ import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 import java.util.{Calendar, Date, Optional, UUID}
 
+// TODO: Rename to ClassDefinitionDiscoverySettings
 /**
   * Settings for class extraction which is done to handle e.g. syntax suggestions in UI
   *
@@ -40,6 +42,7 @@ case class ClassExtractionSettings(
     excludeClassPredicates: Seq[ClassPredicate],
     excludeClassMemberPredicates: Seq[ClassMemberPredicate],
     includeClassMemberPredicates: Seq[ClassMemberPredicate],
+    typingFunctionRules: Seq[TypingFunctionRule],
     propertyExtractionStrategy: PropertyFromGetterExtractionStrategy
 ) {
 
@@ -52,6 +55,11 @@ case class ClassExtractionSettings(
       NonEmptyList.fromList(includeClassMemberPredicates.filter(p => p.matchesClass(clazz)).toList)
     )
   }
+
+  def typingFunction(clazz: Class[_], member: Member): Option[TypingFunctionForClassMember] =
+    typingFunctionRules.collectFirst {
+      case rule if rule.matchesClassMember(clazz, member) => rule.typingFunction
+    }
 
 }
 
@@ -85,6 +93,8 @@ object ClassExtractionSettings {
     DefaultExcludedClasses,
     DefaultExcludedMembers,
     DefaultIncludedMembers,
+    DefaultTypingFunctionRules,
+    // TODO: We should change this to ReplaceGetterWithProperty which is more natural and which not introduces ambiguity
     PropertyFromGetterExtractionStrategy.AddPropertyNextToGetter
   )
 
@@ -201,11 +211,7 @@ object ClassExtractionSettings {
     List(
       MemberNamePredicate(
         SuperClassPredicate(ClassNamePredicate("org.apache.avro.generic.IndexedRecord")),
-        Set("get", "getSchema", "compareTo", "put")
-      ),
-      MemberNamePatternPredicate(
-        SuperClassPredicate(ClassNamePredicate("org.apache.avro.specific.SpecificRecordBase")),
-        Pattern.compile("(getConversion|writeExternal|readExternal|toByteBuffer|set[A-Z].*)")
+        Set("getSchema", "compareTo", "put")
       )
     )
 
@@ -258,7 +264,7 @@ object ClassExtractionSettings {
       ),
       MemberNamePredicate(
         SuperClassPredicate(ExactClassPredicate[util.Collection[_]]),
-        Set("contains", "containsAll", "get", "getOrDefault", "indexOf", "isEmpty", "lastIndexOf", "size")
+        Set("contains", "containsAll", "get", "indexOf", "isEmpty", "lastIndexOf", "size")
       ),
       MemberNamePredicate(
         SuperClassPredicate(ExactClassPredicate[util.Map[_, _]]),
@@ -313,6 +319,61 @@ object ClassExtractionSettings {
         ClassNamePrefixPredicate("io.circe."),
         Set("noSpaces", "noSpacesSortKeys", "spaces2", "spaces2SortKeys", "spaces4", "spaces4SortKeys", ToStringMethod)
       ),
+    )
+
+  lazy val DefaultTypingFunctionRules: List[TypingFunctionRule] =
+    List(
+      TypingFunctionRule(
+        MemberNamePredicate(
+          SuperClassPredicate(ExactClassPredicate[util.Map[_, _]]),
+          Set("get", "getOrDefault")
+        ),
+        TypingFunctionForClassMember.returnGenericParameterOnPosition(genericParamPosition = 1)
+      ),
+      TypingFunctionRule(
+        MemberNamePredicate(
+          SuperClassPredicate(ExactClassPredicate[util.Map[_, _]]),
+          Set("values")
+        ),
+        TypingFunctionForClassMember.returnGenericParameterOnPositionWrapped(
+          genericParamPosition = 1,
+          wrapGenericParam = valueType => Typed.genericTypeClass[util.Collection[_]](List(valueType))
+        )
+      ),
+      TypingFunctionRule(
+        MemberNamePredicate(
+          SuperClassPredicate(ExactClassPredicate[util.Map[_, _]]),
+          Set("keySet")
+        ),
+        TypingFunctionForClassMember.returnGenericParameterOnPositionWrapped(
+          genericParamPosition = 0,
+          wrapGenericParam = valueType => Typed.genericTypeClass[util.Set[_]](List(valueType))
+        )
+      ),
+      TypingFunctionRule(
+        MemberNamePredicate(
+          SuperClassPredicate(ExactClassPredicate[util.Collection[_]]),
+          Set("get")
+        ),
+        TypingFunctionForClassMember.returnGenericParameterOnPosition(genericParamPosition = 0)
+      ),
+      TypingFunctionRule(
+        MemberNamePredicate(
+          SuperClassPredicate(ExactClassPredicate[util.Optional[_]]),
+          Set("get", "orElse")
+        ),
+        TypingFunctionForClassMember.returnGenericParameterOnPosition(genericParamPosition = 0)
+      ),
+      TypingFunctionRule(
+        MemberNamePredicate(
+          SuperClassPredicate(ClassNamePredicate("org.apache.avro.generic.GenericRecord")),
+          Set("get")
+        ),
+        TypingFunctionForClassMember.returnRecordFieldsGenericParameterOnPositionWrapped(
+          genericParamPosition = 1,
+          wrapGenericParam = identity
+        )
+      )
     )
 
   private case class DumpCaseClass()

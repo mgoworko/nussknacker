@@ -1,5 +1,6 @@
 package pl.touk.nussknacker.engine.flink.util.transformer.aggregate;
 
+import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Map;
 import pl.touk.nussknacker.engine.api.Hidden;
@@ -19,11 +20,13 @@ import scala.collection.JavaConverters;
  *
  * You should define `#AGG` global variable, because it is used in editors.
  */
-public class AggregateHelper {
+public class AggregateHelper implements Serializable {
 
     public static final SimpleParameterEditor SIMPLE_EDITOR = new FixedValuesParameterEditor(JavaConverters.collectionAsScalaIterableConverter(Arrays.asList(
             new FixedExpressionValue("#AGG.first", "First"),
             new FixedExpressionValue("#AGG.last", "Last"),
+            new FixedExpressionValue("#AGG.countWhen", "CountWhen"),
+            new FixedExpressionValue("#AGG.average", "Average"),
             new FixedExpressionValue("#AGG.min", "Min"),
             new FixedExpressionValue("#AGG.max", "Max"),
             new FixedExpressionValue("#AGG.sum", "Sum"),
@@ -41,6 +44,8 @@ public class AggregateHelper {
     private static final Aggregator SET = aggregates.SetAggregator$.MODULE$;
     private static final Aggregator FIRST = aggregates.FirstAggregator$.MODULE$;
     private static final Aggregator LAST = aggregates.LastAggregator$.MODULE$;
+    private static final Aggregator COUNT_WHEN = aggregates.CountWhenAggregator$.MODULE$;
+    private static final Aggregator AVERAGE = aggregates.AverageAggregator$.MODULE$;
     private static final Aggregator APPROX_CARDINALITY = HyperLogLogPlusAggregator$.MODULE$.apply(5, 10);
 
     // Instance methods below are for purpose of using in SpEL so your IDE can report that they are not used.
@@ -59,10 +64,12 @@ public class AggregateHelper {
 
     public Aggregator last = LAST;
 
+    public Aggregator countWhen = COUNT_WHEN;
+    public Aggregator average = AVERAGE;
+
     public Aggregator approxCardinality = APPROX_CARDINALITY;
 
     public Aggregator map(@ParamName("parts") Map<String, Aggregator> parts) {
         return new aggregates.MapAggregator(parts);
     }
-
 }

@@ -1,16 +1,15 @@
 import React, { useCallback } from "react";
-import { Error, errorValidator, mandatoryValueValidator } from "./editors/Validators";
 import EditableEditor from "./editors/EditableEditor";
 import LabeledInput from "./editors/field/LabeledInput";
 import LabeledTextarea from "./editors/field/LabeledTextarea";
-import { NodeType, TypedObjectTypingResult, TypingInfo, TypingResult, VariableTypes } from "../../../types";
-import { NodeTableBody } from "./NodeDetailsContent/NodeTable";
+import { NodeType, NodeValidationError, TypedObjectTypingResult, TypingInfo, TypingResult, VariableTypes } from "../../../types";
 import { useDiffMark } from "./PathsToMark";
 import { useSelector } from "react-redux";
 import { RootState } from "../../../reducers";
 import { getExpressionType, getNodeTypingInfo } from "./NodeDetailsContent/selectors";
 import ProcessUtils from "../../../common/ProcessUtils";
 import { IdField } from "./IdField";
+import { getValidationErrorsForField } from "./editors/Validators";
 
 const DEFAULT_EXPRESSION_ID = "$expression";
 
@@ -23,10 +22,10 @@ interface Props {
     node: NodeType;
     setProperty: <K extends keyof NodeType>(property: K, newValue: NodeType[K], defaultValue?: NodeType[K]) => void;
     showValidation: boolean;
+    errors: NodeValidationError[];
     showSwitch?: boolean;
     variableTypes: VariableTypes;
     renderFieldLabel: (paramName: string) => JSX.Element;
-    fieldErrors?: Error[];
 }
 
 export default function Variable({
@@ -34,7 +33,7 @@ export default function Variable({
     setProperty,
     isEditMode,
     showValidation,
-    fieldErrors,
+    errors,
     variableTypes,
     renderFieldLabel,
 }: Props): JSX.Element {
@@ -47,15 +46,16 @@ export default function Variable({
         return ProcessUtils.humanReadableType(varExprType);
     });
     const readOnly = !isEditMode;
+
     return (
-        <NodeTableBody className="node-variable-builder-body">
+        <>
             <IdField
                 node={node}
                 isEditMode={isEditMode}
                 showValidation={showValidation}
                 renderFieldLabel={renderFieldLabel}
                 setProperty={setProperty}
-                errors={fieldErrors}
+                errors={errors}
             />
             <LabeledInput
                 value={node.varName}
@@ -63,12 +63,11 @@ export default function Variable({
                 isMarked={isMarked("varName")}
                 readOnly={readOnly}
                 showValidation={showValidation}
-                validators={[mandatoryValueValidator, errorValidator(fieldErrors, "varName")]}
+                fieldErrors={getValidationErrorsForField(errors, "varName")}
             >
                 {renderFieldLabel("Variable Name")}
             </LabeledInput>
             <EditableEditor
-                fieldName="$expression"
                 fieldLabel={"Expression"}
                 renderFieldLabel={renderFieldLabel}
                 expressionObj={node.value}
@@ -76,7 +75,7 @@ export default function Variable({
                 readOnly={readOnly}
                 showValidation={showValidation}
                 showSwitch={false}
-                errors={fieldErrors}
+                fieldErrors={getValidationErrorsForField(errors, "$expression")}
                 variableTypes={variableTypes}
                 validationLabelInfo={inferredVariableType}
             />
@@ -86,9 +85,10 @@ export default function Variable({
                 isMarked={isMarked("additionalFields.description")}
                 readOnly={readOnly}
                 className={"node-input"}
+                fieldErrors={getValidationErrorsForField(errors, "additionalFields.description")}
             >
                 {renderFieldLabel("Description")}
             </LabeledTextarea>
-        </NodeTableBody>
+        </>
     );
 }

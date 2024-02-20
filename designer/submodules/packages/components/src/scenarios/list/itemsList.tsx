@@ -20,9 +20,9 @@ import { ScenarioAvatar } from "./scenarioAvatar";
 
 const ListRowContent = React.memo(function ListRowContent({ row }: { row: RowType }): JSX.Element {
     return (
-        <ListItemButton component={ExternalLink} href={scenarioHref(row.id)}>
+        <ListItemButton component={ExternalLink} href={scenarioHref(row.name)}>
             <ListItemAvatar>
-                <ScenarioAvatar process={row} />
+                <ScenarioAvatar scenario={row} />
             </ListItemAvatar>
             <ListItemText primary={<FirstLine row={row} />} secondary={<SecondLine row={row} />} />
         </ListItemButton>
@@ -39,7 +39,7 @@ const ListRow = React.memo(function ListRow({ row, style }: { row: RowType; styl
                 sx={{ opacity }}
                 secondaryAction={
                     !row.isFragment && (
-                        <IconButton component={ExternalLink} href={metricsHref(row.id)}>
+                        <IconButton component={ExternalLink} href={metricsHref(row.name)}>
                             <AssessmentIcon />
                         </IconButton>
                     )

@@ -101,10 +101,12 @@ describe("Components list", () => {
         cy.contains(/^usages$/i).click();
         cy.contains(/^≥ 1$/i).click();
         cy.get("body").click();
-        cy.get("[data-id=filter] [data-testid=LinkIcon]").click();
+        cy.get("[data-id=builtin-filter] [data-testid=LinkIcon]").click();
         cy.contains(/^status$/i).click();
         cy.contains(/^running$/i).click();
+        cy.get("body").click();
         cy.contains(/^no rows$/i).should("be.visible");
+        cy.contains(/^status$/i).click();
         cy.contains(/^not deployed$/i).click();
         cy.matchQuery("?STATUS=RUNNING&STATUS=NOT_DEPLOYED");
         cy.get("body").click();
@@ -157,7 +159,7 @@ describe("Components list", () => {
             .click();
 
         // we are clicking "X more" on list of places of usages to test usages list expansion
-        cy.contains("4 more").click();
+        cy.contains("5 more").click();
         cy.get("#app-container>main").matchImage({
             screenshotConfig: { clip: { x: 0, y: 0, width: 1400, height: 300 } },
         });
@@ -166,7 +168,7 @@ describe("Components list", () => {
     it("should filter usages", () => {
         cy.createTestProcess(`${seed}_xxx`, "testProcess2");
 
-        cy.visit("/components/usages/filter");
+        cy.visit("/components/usages/builtin-filter");
 
         cy.get("input[type=text]").type("8 xxx");
         cy.matchQuery("?TEXT=8+xxx");
@@ -196,7 +198,7 @@ describe("Components list", () => {
         cy.contains(/^ok$/i).click();
 
         cy.viewport(1400, 600);
-        cy.visit("/components/usages/filter");
+        cy.visit("/components/usages/builtin-filter");
 
         cy.contains(/^other$/i).click();
         cy.get("[role=menu]").find("li[role=menuitem]").as("options");

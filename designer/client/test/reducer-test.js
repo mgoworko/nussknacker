@@ -2,9 +2,7 @@ import reducer from "../src/reducers/index";
 import NodeUtils from "../src/components/graph/NodeUtils";
 
 const baseProcessState = {
-    id: "DEFGH",
     name: "DEFGH",
-    processVersionId: 23,
     isLatestVersion: true,
     processType: "graph",
     processCategory: "Category1",
@@ -13,8 +11,7 @@ const baseProcessState = {
     createdBy: "admin",
     tags: [],
     currentlyDeployedAt: ["test"],
-    json: {
-        id: "DEFGH",
+    scenarioGraph: {
         properties: {
             parallelism: 3,
             additionalFields: {
@@ -89,12 +86,12 @@ const baseProcessState = {
                 to: "sendSms",
             },
         ],
-        validationResult: {
-            errors: {
-                invalidNodes: {},
-                processPropertiesErrors: [],
-                globalErrors: [],
-            },
+    },
+    validationResult: {
+        errors: {
+            invalidNodes: {},
+            processPropertiesErrors: [],
+            globalErrors: [],
         },
     },
     state: {},
@@ -109,14 +106,14 @@ const baseState = reducer(
 
 const baseStateWithProcess = reducer(baseState, {
     type: "DISPLAY_PROCESS",
-    fetchedProcessDetails: baseProcessState,
+    scenario: baseProcessState,
 });
 
 const reduceAll = (actions) => actions.reduce((state, action) => reducer(state, action), baseStateWithProcess);
 
 describe("Reducer suite", () => {
     it("Display process", () => {
-        expect(baseStateWithProcess.graphReducer.processToDisplay.id).toEqual(baseProcessState.id);
+        expect(baseStateWithProcess.graphReducer.scenario.name).toEqual(baseProcessState.name);
     });
 });
 
@@ -150,7 +147,7 @@ describe("Nodes added", () => {
             },
         ]);
 
-        expect(NodeUtils.getNodeById(testNode.id, result.graphReducer.processToDisplay)).toEqual(testNode);
+        expect(NodeUtils.getNodeById(testNode.id, result.graphReducer.scenario.scenarioGraph)).toEqual(testNode);
         expect(result.graphReducer.layout.find((n) => n.id === testNode.id).position).toEqual(testPosition);
     });
 
@@ -163,7 +160,7 @@ describe("Nodes added", () => {
             },
         ]);
 
-        expect(NodeUtils.getNodeById("kafka-transaction 1", result.graphReducer.processToDisplay)).toEqual({
+        expect(NodeUtils.getNodeById("kafka-transaction 1", result.graphReducer.scenario.scenarioGraph)).toEqual({
             ...testNode,
             id: "kafka-transaction 1",
         });
@@ -188,11 +185,11 @@ describe("Nodes added", () => {
             },
         ]);
 
-        expect(NodeUtils.getNodeById("kafka-transaction (copy 1)", result.graphReducer.processToDisplay)).toEqual({
+        expect(NodeUtils.getNodeById("kafka-transaction (copy 1)", result.graphReducer.scenario.scenarioGraph)).toEqual({
             ...testNode,
             id: "kafka-transaction (copy 1)",
         });
-        expect(NodeUtils.getNodeById("kafka-transaction (copy 2)", result.graphReducer.processToDisplay)).toEqual({
+        expect(NodeUtils.getNodeById("kafka-transaction (copy 2)", result.graphReducer.scenario.scenarioGraph)).toEqual({
             ...testNode,
             id: "kafka-transaction (copy 2)",
         });
@@ -219,12 +216,12 @@ describe("Nodes added", () => {
             },
         ]);
 
-        expect(NodeUtils.getNodeById("newNode", result.graphReducer.processToDisplay)).toEqual({ ...testNode, id: "newNode" });
-        expect(NodeUtils.getNodeById("kafka-transaction (copy 1)", result.graphReducer.processToDisplay)).toEqual({
+        expect(NodeUtils.getNodeById("newNode", result.graphReducer.scenario.scenarioGraph)).toEqual({ ...testNode, id: "newNode" });
+        expect(NodeUtils.getNodeById("kafka-transaction (copy 1)", result.graphReducer.scenario.scenarioGraph)).toEqual({
             ...testNode,
             id: "kafka-transaction (copy 1)",
         });
-        expect(NodeUtils.getEdgeById("newNode-kafka-transaction (copy 1)", result.graphReducer.processToDisplay)).toEqual({
+        expect(NodeUtils.getEdgeById("newNode-kafka-transaction (copy 1)", result.graphReducer.scenario.scenarioGraph)).toEqual({
             from: "newNode",
             to: "kafka-transaction (copy 1)",
         });

@@ -6,8 +6,10 @@ import io.circe.generic.extras.semiauto.{deriveConfiguredDecoder, deriveConfigur
 import io.circe.generic.extras.{ConfiguredJsonCodec, JsonKey}
 import org.apache.commons.lang3.ClassUtils
 import pl.touk.nussknacker.engine.api.CirceUtil._
+import pl.touk.nussknacker.engine.api.definition.FixedExpressionValue
+import pl.touk.nussknacker.engine.api.parameter.{ParameterValueCompileTimeValidation, ValueInputWithFixedValues}
 import pl.touk.nussknacker.engine.api.{JoinReference, LayoutData}
-import pl.touk.nussknacker.engine.graph.evaluatedparam.{BranchParameters, Parameter}
+import pl.touk.nussknacker.engine.graph.evaluatedparam.{BranchParameters, Parameter => NodeParameter}
 import pl.touk.nussknacker.engine.graph.expression.Expression
 import pl.touk.nussknacker.engine.graph.fragment.FragmentRef
 import pl.touk.nussknacker.engine.graph.node.FragmentInputDefinition.FragmentParameter
@@ -84,9 +86,10 @@ object node {
   }
 
   sealed trait CustomNodeData extends NodeData with WithComponent with RealNodeData with WithParameters {
+    // TODO: rename to componentId
     def nodeType: String
 
-    def parameters: List[Parameter]
+    def parameters: List[NodeParameter]
 
     def outputVar: Option[String]
   }
@@ -101,7 +104,7 @@ object node {
   See: ParametersUtils.ts/#parametersPath and ParametersUtils.ts/#adjustParameters
    */
   trait WithParameters {
-    def parameters: List[Parameter]
+    def parameters: List[NodeParameter]
   }
 
   sealed trait OneOutputSubsequentNodeData extends NodeData with RealNodeData
@@ -121,15 +124,16 @@ object node {
       with WithParameters {
     override val componentId: String = ref.typ
 
-    override def parameters: List[Parameter] = ref.parameters
+    override def parameters: List[NodeParameter] = ref.parameters
   }
 
   // TODO JOIN: move branchParameters to BranchEnd
   case class Join(
       id: String,
       outputVar: Option[String],
+      // TODO: rename to componentId
       nodeType: String,
-      parameters: List[Parameter],
+      parameters: List[NodeParameter],
       branchParameters: List[BranchParameters],
       additionalFields: Option[UserDefinedAdditionalNodeFields] = None
   ) extends StartingNodeData
@@ -154,6 +158,7 @@ object node {
   }
 
   // expression and expressionVal are deprecated, will be removed in the future
+  // TODO: rename to Choice
   case class Switch(
       id: String,
       expression: Option[Expression],
@@ -163,6 +168,7 @@ object node {
       with RealNodeData
       with DeadEndingData
 
+  // TODO: rename to RecordVariable
   case class VariableBuilder(
       id: String,
       varName: String,
@@ -191,14 +197,15 @@ object node {
       with WithParameters {
     override val componentId: String = service.id
 
-    override def parameters: List[Parameter] = service.parameters
+    override def parameters: List[NodeParameter] = service.parameters
   }
 
   case class CustomNode(
       id: String,
       outputVar: Option[String],
+      // TODO: rename to componentId
       nodeType: String,
-      parameters: List[Parameter],
+      parameters: List[NodeParameter],
       additionalFields: Option[UserDefinedAdditionalNodeFields] = None
   ) extends OneOutputSubsequentNodeData
       with CustomNodeData
@@ -218,7 +225,7 @@ object node {
       with WithParameters {
     override val componentId: String = service.id
 
-    override def parameters: List[Parameter] = service.parameters
+    override def parameters: List[NodeParameter] = service.parameters
   }
 
   case class BranchEndData(definition: BranchEndDefinition) extends EndingNodeData {
@@ -255,7 +262,7 @@ object node {
       with WithParameters {
     override val componentId: String = ref.typ
 
-    override def parameters: List[Parameter] = ref.parameters
+    override def parameters: List[NodeParameter] = ref.parameters
   }
 
   // TODO: A better way of passing information regarding fragment parameter definition
@@ -305,25 +312,15 @@ object node {
   object FragmentInputDefinition {
 
     @ConfiguredJsonCodec
-    sealed trait ValueInputWithFixedValues {
-      def allowOtherValue: Boolean
-      def fixedValuesList: List[FixedExpressionValue]
-    }
-
-    case class ValueInputWithFixedValuesProvided(fixedValuesList: List[FixedExpressionValue], allowOtherValue: Boolean)
-        extends ValueInputWithFixedValues
-
-    @ConfiguredJsonCodec
     case class FragmentParameter(
         name: String,
         typ: FragmentClazzRef,
         required: Boolean = false,
         initialValue: Option[FixedExpressionValue],
         hintText: Option[String],
-        valueEditor: Option[ValueInputWithFixedValues]
+        valueEditor: Option[ValueInputWithFixedValues],
+        valueCompileTimeValidation: Option[ParameterValueCompileTimeValidation],
     )
-
-    @JsonCodec case class FixedExpressionValue(expression: String, label: String)
 
     object FragmentParameter {
 
@@ -334,7 +331,8 @@ object node {
           required = false,
           initialValue = None,
           hintText = None,
-          valueEditor = None
+          valueEditor = None,
+          valueCompileTimeValidation = None
         )
       }
 
@@ -355,12 +353,15 @@ object node {
 
   }
 
-  val IdFieldName              = "$id"
-  val ParameterFieldNamePrefix = "$param"
-  val InitialValueFieldName    = "$initialValue"
-  val InputModeFieldName       = "$inputMode"
-  val TypFieldName             = "$typ"
-  val FixedValuesListFieldName = "$fixedValuesList"
+  val IdFieldName = "$id"
+  // TODO: move these FragmentInputDefinition related vals/def under FragmentInputDefinition for better organization
+  val ParameterFieldNamePrefix      = "$param"
+  val ParameterNameFieldName        = "$name"
+  val InitialValueFieldName         = "$initialValue"
+  val InputModeFieldName            = "$inputMode"
+  val TypFieldName                  = "$typ"
+  val FixedValuesListFieldName      = "$fixedValuesList"
+  val ValidationExpressionFieldName = "$validationExpression"
 
   def qualifiedParamFieldName(
       paramName: String,

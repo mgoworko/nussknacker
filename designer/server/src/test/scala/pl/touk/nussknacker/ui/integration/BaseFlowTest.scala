@@ -1,20 +1,22 @@
 package pl.touk.nussknacker.ui.integration
 
-import com.typesafe.config.Config
+import io.circe.Json.{Null, arr, fromFields, fromString, obj}
 import io.circe.syntax.EncoderOps
-import io.circe.{Decoder, Json}
+import io.circe.{Decoder, Json, JsonObject}
 import org.apache.commons.io.FileUtils
 import org.scalatest.OptionValues
 import org.scalatest.funsuite.AnyFunSuiteLike
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.prop.TableDrivenPropertyChecks
 import org.typelevel.ci._
-import pl.touk.nussknacker.engine.api.component.{ComponentGroupName, ParameterConfig, SingleComponentConfig}
 import pl.touk.nussknacker.engine.api.definition._
-import pl.touk.nussknacker.engine.api.displayedgraph.displayablenode.Edge
-import pl.touk.nussknacker.engine.api.displayedgraph.{DisplayableProcess, ProcessProperties}
+import pl.touk.nussknacker.engine.api.editor.DualEditorMode
+import pl.touk.nussknacker.engine.api.graph.{Edge, ProcessProperties, ScenarioGraph}
+import pl.touk.nussknacker.engine.api.process.ProcessName
 import pl.touk.nussknacker.engine.api.{FragmentSpecificData, StreamMetaData}
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
+import pl.touk.nussknacker.engine.definition.component.defaultconfig.DefaultsComponentIcon
 import pl.touk.nussknacker.engine.graph.expression.Expression
 import pl.touk.nussknacker.engine.graph.node.FragmentInputDefinition.{FragmentClazzRef, FragmentParameter}
 import pl.touk.nussknacker.engine.graph.node.{FragmentInputDefinition, FragmentOutputDefinition, Processor}
@@ -28,14 +30,21 @@ import pl.touk.nussknacker.restmodel.validation.ValidationResults.{
   ValidationErrors,
   ValidationResult
 }
+import pl.touk.nussknacker.test.base.it.NuItTest
+import pl.touk.nussknacker.test.config.WithSimplifiedDesignerConfig
+import pl.touk.nussknacker.test.config.WithSimplifiedDesignerConfig.TestCategory.Category1
+import pl.touk.nussknacker.test.config.WithSimplifiedDesignerConfig.TestProcessingType.Streaming
+import pl.touk.nussknacker.test.mock.TestAdditionalUIConfigProvider
+import pl.touk.nussknacker.test.utils.domain.ProcessTestData
+import pl.touk.nussknacker.test.utils.domain.ScenarioToJsonHelper.{ScenarioGraphToJson, ScenarioToJson}
+import pl.touk.nussknacker.test.utils.domain.TestProcessUtil.toJson
 import pl.touk.nussknacker.test.{EitherValuesDetailedMessage, WithTestHttpClient}
-import pl.touk.nussknacker.ui.api.NodeValidationRequest
-import pl.touk.nussknacker.ui.api.helpers._
-import pl.touk.nussknacker.ui.definition.TestAdditionalUIConfigProvider
-import pl.touk.nussknacker.ui.definition.UIProcessObjectsFactory.createUIScenarioPropertyConfig
-import pl.touk.nussknacker.ui.process.marshall.ProcessConverter
+import pl.touk.nussknacker.ui.api.{NodeValidationRequest, ScenarioValidationRequest}
+import pl.touk.nussknacker.ui.definition.DefinitionsService.createUIScenarioPropertyConfig
+import pl.touk.nussknacker.ui.process.ProcessService.CreateScenarioCommand
+import pl.touk.nussknacker.ui.process.marshall.CanonicalProcessConverter
 import pl.touk.nussknacker.ui.util.MultipartUtils.sttpPrepareMultiParts
-import pl.touk.nussknacker.ui.util.{ConfigWithScalaVersion, CorsSupport, SecurityHeadersSupport}
+import pl.touk.nussknacker.ui.util.{CorsSupport, SecurityHeadersSupport}
 import sttp.client3.circe.asJson
 import sttp.client3.{UriContext, quickRequest}
 import sttp.model.{Header, MediaType, StatusCode}
@@ -48,10 +57,12 @@ import scala.util.Properties
 class BaseFlowTest
     extends AnyFunSuiteLike
     with NuItTest
+    with WithSimplifiedDesignerConfig
     with WithTestHttpClient
     with Matchers
     with OptionValues
-    with EitherValuesDetailedMessage {
+    with EitherValuesDetailedMessage
+    with TableDrivenPropertyChecks {
 
   import BaseFlowTest._
 
@@ -59,14 +70,12 @@ class BaseFlowTest
   // currently we delete file in beforeAll, because it's used *also* in initialization...
   val dynamicServiceFile = new File(Properties.tmpDir, "nk-dynamic-params.lst")
 
-  override def nuTestConfig: Config = ConfigWithScalaVersion.TestsConfig
-
   override def beforeAll(): Unit = {
     super.beforeAll()
     dynamicServiceFile.delete()
   }
 
-  override def afterAll(): Unit = {
+  override protected def afterAll(): Unit = {
     dynamicServiceFile.delete()
     super.afterAll()
   }
@@ -82,141 +91,162 @@ class BaseFlowTest
     saveProcess(process)
   }
 
-  test("ensure nodes config is properly parsed") {
+  test("ensure components definition is enriched with components config") {
     val response = httpClient.send(
       quickRequest
-        .get(uri"$nuDesignerHttpAddress/api/processDefinitionData/streaming?isFragment=false")
+        .get(uri"$nuDesignerHttpAddress/api/processDefinitionData/${Streaming.stringify}?isFragment=false")
         .auth
         .basic("admin", "admin")
     )
     response.code shouldEqual StatusCode.Ok
 
-    val settingsJson = response.extractFieldJsonValue("componentsConfig")
-    val settings     = Decoder[Map[String, SingleComponentConfig]].decodeJson(settingsJson).toOption.get
+    val componentsResultJson = response.extractFieldJsonValue("components").asObject.value.toMap
+
+    def encodeEditor(parameterEditor: ParameterEditor): Json =
+      parameterEditor.asJson
 
     // docs url comes from defaultModelConf.conf in dev-model
-    val underTest = Map(
-      "filter" -> SingleComponentConfig(
-        None,
-        None,
-        Some("https://touk.github.io/nussknacker/filter"),
-        componentGroup = None,
-        componentId = None
+    val expectedDefinition = Map(
+      "builtin-filter" -> obj(
+        "parameters" -> arr(),
+        "icon"       -> fromString(DefaultsComponentIcon.FilterIcon),
+        "docsUrl"    -> fromString("https://touk.github.io/nussknacker/filter"),
       ),
-      "test1" -> SingleComponentConfig(
-        params = None,
-        icon = Some("/assets/components/Sink.svg"),
-        docsUrl = None,
-        componentGroup = None,
-        componentId = None
-      ),
-      "enricher" -> SingleComponentConfig(
-        params = Some(
-          Map(
-            "param" -> ParameterConfig(Some("'default value'"), Some(StringParameterEditor), None, None, None),
-            "paramDualEditor" -> ParameterConfig(
-              None,
-              None,
-              Some(
-                List(FixedValuesValidator(possibleValues = List(FixedExpressionValue("someExpression", "someLabel"))))
-              ),
-              None,
-              None
+      "service-enricher" -> obj(
+        "parameters" -> arr(
+          obj(
+            "name"         -> fromString("param"),
+            "label"        -> fromString("param"),
+            "defaultValue" -> Expression.spel("'default-from-additional-ui-config-provider'").asJson,
+            "editor"       -> encodeEditor(DualParameterEditor(StringParameterEditor, DualEditorMode.RAW)),
+            "hintText"     -> fromString("hint-text-from-additional-ui-config-provider"),
+          ),
+          obj(
+            "name"  -> fromString("tariffType"),
+            "label" -> fromString("tariffType"),
+            "defaultValue" -> Expression
+              .spel("T(pl.touk.nussknacker.engine.management.sample.TariffType).NORMAL")
+              .asJson,
+            "editor" -> encodeEditor(
+              DualParameterEditor(
+                FixedValuesParameterEditor(
+                  List(
+                    FixedExpressionValue("T(pl.touk.nussknacker.engine.management.sample.TariffType).NORMAL", "normal"),
+                    FixedExpressionValue("T(pl.touk.nussknacker.engine.management.sample.TariffType).GOLD", "gold")
+                  )
+                ),
+                DualEditorMode.SIMPLE
+              )
             ),
-            "param" -> ParameterConfig(Some("'default value'"), Some(StringParameterEditor), None, None, None),
-          )
+            "hintText" -> Null,
+          ),
         ),
-        icon = Some("/assets/components/Filter.svg"),
-        docsUrl = Some("https://touk.github.io/nussknacker/enricher"),
-        componentGroup = Some(TestAdditionalUIConfigProvider.componentGroupName),
-        componentId = None
+        "icon"    -> fromString("/assets/components/Filter.svg"),
+        "docsUrl" -> fromString("https://touk.github.io/nussknacker/enricher"),
       ),
-      "multipleParamsService" -> SingleComponentConfig(
-        params = Some(
-          Map(
-            "baz" -> ParameterConfig(
-              None,
-              Some(FixedValuesParameterEditor(List(FixedExpressionValue("1", "1"), FixedExpressionValue("2", "2")))),
-              None,
-              None,
-              Some("some hint text")
+      "service-multipleParamsService" -> obj(
+        "parameters" -> arr(
+          obj(
+            "name"         -> fromString("foo"),
+            "label"        -> fromString("foo"),
+            "defaultValue" -> Expression.spel("'test'").asJson,
+            "editor"       -> encodeEditor(FixedValuesParameterEditor(List(FixedExpressionValue("'test'", "test")))),
+            "hintText"     -> Null,
+          ),
+          obj(
+            "name"         -> fromString("bar"),
+            "label"        -> fromString("bar"),
+            "defaultValue" -> Expression.spel("''").asJson,
+            "editor"       -> encodeEditor(StringParameterEditor),
+            "hintText"     -> Null,
+          ),
+          obj(
+            "name"         -> fromString("baz"),
+            "label"        -> fromString("baz"),
+            "defaultValue" -> Expression.spel("1").asJson,
+            "editor" -> encodeEditor(
+              FixedValuesParameterEditor(List(FixedExpressionValue("1", "1"), FixedExpressionValue("2", "2")))
             ),
-            "bar" -> ParameterConfig(None, Some(StringParameterEditor), None, None, None),
-            "foo" -> ParameterConfig(
-              None,
-              Some(FixedValuesParameterEditor(List(FixedExpressionValue("'test'", "test")))),
-              None,
-              None,
-              None
-            ),
+            "hintText" -> fromString("some hint text"),
+          ),
+          obj(
+            "name"         -> fromString("quax"),
+            "label"        -> fromString("quax"),
+            "defaultValue" -> Expression.spel("''").asJson,
+            "editor"       -> encodeEditor(DualParameterEditor(StringParameterEditor, DualEditorMode.RAW)),
+            "hintText"     -> Null,
+          ),
+        ),
+        "icon"    -> fromString(DefaultsComponentIcon.ServiceIcon),
+        "docsUrl" -> Null,
+      ),
+      "service-accountService" -> obj(
+        "parameters" -> arr(),
+        "icon"       -> fromString(DefaultsComponentIcon.ServiceIcon),
+        "docsUrl"    -> fromString("accountServiceDocs"),
+      ),
+      "service-providedComponent-component-v1" -> obj(
+        "parameters" -> arr(
+          obj(
+            "name"         -> fromString("fromConfig-v1"),
+            "label"        -> fromString("fromConfig-v1"),
+            "defaultValue" -> Expression.spel("''").asJson,
+            "editor"       -> encodeEditor(DualParameterEditor(StringParameterEditor, DualEditorMode.RAW)),
+            "hintText"     -> Null,
           )
         ),
-        icon = None,
-        docsUrl = None,
-        componentGroup = None,
-        componentId = None
-      ),
-      "accountService" -> SingleComponentConfig(
-        params = None,
-        icon = None,
-        docsUrl = Some("accountServiceDocs"),
-        componentGroup = None,
-        componentId = None
-      ),
-      "sub1" -> SingleComponentConfig(
-        params = Some(
-          Map(
-            "param1" -> ParameterConfig(None, Some(StringParameterEditor), None, None, None)
-          )
-        ),
-        icon = None,
-        docsUrl = Some("http://nussknacker.io"),
-        componentGroup = None,
-        componentId = None,
-      ),
-      "optionalTypesService" -> SingleComponentConfig(
-        params = Some(
-          Map(
-            "overriddenByFileConfigParam" -> ParameterConfig(None, None, Some(List.empty), None, None),
-            "overriddenByDevConfigParam" -> ParameterConfig(
-              None,
-              None,
-              Some(List(MandatoryParameterValidator)),
-              None,
-              None
-            )
-          )
-        ),
-        icon = None,
-        docsUrl = None,
-        componentGroup = Some(ComponentGroupName("types")),
-        componentId = None
-      ),
-      "providedComponent-component-v1" -> SingleComponentConfig(
-        params = None,
-        icon = None,
-        docsUrl = Some("https://nussknacker.io/Configuration.html"),
-        componentGroup = None,
-        componentId = None
-      ),
-      "$properties" -> SingleComponentConfig(
-        params = None,
-        icon = None,
-        docsUrl = Some(
-          "https://nussknacker.io/documentation/docs/installation_configuration_guide/ModelConfiguration#scenarios-additional-properties"
-        ),
-        componentGroup = None,
-        componentId = None
+        "icon"    -> fromString(DefaultsComponentIcon.ServiceIcon),
+        "docsUrl" -> fromString("https://nussknacker.io/Configuration.html"),
       )
     )
 
-    settings.collect { case (k, v) if underTest.keySet contains k => (k, v) } shouldBe underTest
+    // We check only these specified in expectations to not overload this test
+    componentsResultJson.keys.toList.sorted should contain allElementsOf expectedDefinition.keys.toList.sorted
+    forAll(
+      Table(
+        ("componentName", "expectedDefinition"),
+        expectedDefinition.toSeq: _*
+      )
+    ) { (componentName, expectedDefinition) =>
+      val expectedDefinitionObj = expectedDefinition.asObject.value
+      val returnedDefinition    = componentsResultJson.get(componentName).value.asObject.value
+
+      returnedDefinition("icon").value shouldEqual expectedDefinitionObj("icon").value
+      returnedDefinition("docsUrl").value shouldEqual expectedDefinitionObj("docsUrl").value
+      checkParameters(expectedDefinitionObj, returnedDefinition)
+    }
+  }
+
+  private def checkParameters(expectedDefinitionObj: JsonObject, returnedDefinition: JsonObject) = {
+    def paramName(paramJson: Json) = paramJson.asObject.value("name").value.asString.value
+
+    def toParamsMap(paramsJson: Json) = paramsJson.asArray.value.map { paramJson =>
+      paramName(paramJson) -> paramJson
+    }.toMap
+
+    val expectedParameters = toParamsMap(expectedDefinitionObj("parameters").value)
+    val returnedParameters = toParamsMap(returnedDefinition("parameters").value)
+
+    returnedParameters.keys.toList shouldEqual expectedParameters.keys.toList
+    forAll(Table(("paramName", "expectedParameter"), expectedParameters.toList: _*)) { (paramName, expectedParameter) =>
+      val paramWithConfigurableFieldsOnly =
+        fromFields(
+          returnedParameters
+            .get(paramName)
+            .value
+            .asObject
+            .value
+            .filterKeys(!Set("typ", "additionalVariables", "variablesToHide", "branchParam").contains(_))
+            .toList
+        )
+      paramWithConfigurableFieldsOnly shouldEqual expectedParameter
+    }
   }
 
   test("ensure scenario properties config is properly applied") {
     val response = httpClient.send(
       quickRequest
-        .get(uri"$nuDesignerHttpAddress/api/processDefinitionData/streaming?isFragment=false")
+        .get(uri"$nuDesignerHttpAddress/api/processDefinitionData/${Streaming.stringify}?isFragment=false")
         .auth
         .basic("admin", "admin")
     )
@@ -233,19 +263,16 @@ class BaseFlowTest
       "environment" -> UiScenarioPropertyConfig(
         defaultValue = Some("test"),
         editor = StringParameterEditor,
-        validators = List(MandatoryParameterValidator),
         label = Some("Environment")
       ),
       "maxEvents" -> UiScenarioPropertyConfig(
         defaultValue = None,
         editor = StringParameterEditor,
-        validators = List(LiteralIntegerValidator),
         label = Some("Max events")
       ),
       "numberOfThreads" -> UiScenarioPropertyConfig(
         defaultValue = Some("1"),
         editor = FixedValuesParameterEditor(fixedPossibleValues),
-        validators = List(FixedValuesValidator(fixedPossibleValues)),
         label = Some("Number of threads")
       ),
       TestAdditionalUIConfigProvider.scenarioPropertyName -> createUIScenarioPropertyConfig(
@@ -259,67 +286,49 @@ class BaseFlowTest
   }
 
   test("validate process scenario properties") {
-    val scenario = ProcessTestData.processWithInvalidScenarioProperties
-    val response1 = httpClient.send(
-      quickRequest
-        .post(
-          uri"$nuDesignerHttpAddress/api/processes/${scenario.id}/Category1?isFragment=${scenario.metaData.isFragment}"
-        )
-        .auth
-        .basic("admin", "admin")
-    )
-    response1.code shouldEqual StatusCode.Created
+    val scenario = ProcessTestData.scenarioGraphWithInvalidScenarioProperties
+    createProcess(ProcessTestData.sampleProcessName)
 
-    val response2 = httpClient.send(
+    val validationResponse = httpClient.send(
       quickRequest
-        .post(uri"$nuDesignerHttpAddress/api/processValidation")
+        .post(uri"$nuDesignerHttpAddress/api/processValidation/${ProcessTestData.sampleProcessName}")
         .contentType(MediaType.ApplicationJson)
-        .body(scenario.asJson.spaces2)
+        .body(ScenarioValidationRequest(ProcessTestData.sampleProcessName, scenario).asJson.spaces2)
         .auth
         .basic("admin", "admin")
     )
 
-    response2.code shouldEqual StatusCode.Ok
-    response2.body should include("Configured property environment (Environment) is missing")
-    response2.body should include("This field value has to be an integer number")
-    response2.body should include("Unknown property unknown")
-    response2.body should include("Property numberOfThreads (Number of threads) has invalid value") //
+    validationResponse.code shouldEqual StatusCode.Ok
+    validationResponse.body should include("Configured property environment (Environment) is missing")
+    validationResponse.body should include("This field value has to be an integer number")
+    validationResponse.body should include("Unknown property unknown")
+    validationResponse.body should include("Property numberOfThreads (Number of threads) has invalid value") //
   }
 
   test("be able to work with fragment with custom class inputs") {
-    val processId = UUID.randomUUID().toString
+    val processId = ProcessName(UUID.randomUUID().toString)
+    createProcess(processId)
 
-    val process = DisplayableProcess(
-      id = processId,
+    val scenarioGraph = ScenarioGraph(
       properties = ProcessProperties(FragmentSpecificData()),
       nodes = List(
         FragmentInputDefinition("input1", List(FragmentParameter("badParam", FragmentClazzRef("i.do.not.exist")))),
         FragmentOutputDefinition("output1", "out1")
       ),
       edges = List(Edge("input1", "output1", None)),
-      processingType = TestProcessingTypes.Streaming,
-      TestCategories.Category1
     )
 
-    val response1 = httpClient.send(
-      quickRequest
-        .post(uri"$nuDesignerHttpAddress/api/processes/$processId/Category1?isFragment=true")
-        .auth
-        .basic("admin", "admin")
-    )
-    response1.code shouldEqual StatusCode.Created
-
-    val response2 = httpClient.send(
+    val updateResponse = httpClient.send(
       quickRequest
         .put(uri"$nuDesignerHttpAddress/api/processes/$processId")
         .contentType(MediaType.ApplicationJson)
-        .body(TestFactory.posting.toJsonAsProcessToSave(process).spaces2)
+        .body(scenarioGraph.toJsonAsProcessToSave.spaces2)
         .auth
         .basic("admin", "admin")
         .response(asJson[ValidationResult])
     )
-    response2.code shouldEqual StatusCode.Ok
-    response2.body.rightValue.errors.invalidNodes("input1") should matchPattern {
+    updateResponse.code shouldEqual StatusCode.Ok
+    updateResponse.body.rightValue.errors.invalidNodes("input1") should matchPattern {
       case List(
             NodeValidationError(
               "FragmentParamClassLoadError",
@@ -331,13 +340,13 @@ class BaseFlowTest
           ) =>
     }
 
-    val response3 = httpClient.send(
+    val fetchResponse = httpClient.send(
       quickRequest
         .get(uri"$nuDesignerHttpAddress/api/processes/$processId")
         .auth
         .basic("admin", "admin")
     )
-    response3.code shouldEqual StatusCode.Ok
+    fetchResponse.code shouldEqual StatusCode.Ok
   }
 
   test("should test process with complexReturnObjectService") {
@@ -355,12 +364,12 @@ class BaseFlowTest
 
     val response = httpClient.send(
       quickRequest
-        .post(uri"$nuDesignerHttpAddress/api/processManagement/test/${process.id}")
+        .post(uri"$nuDesignerHttpAddress/api/processManagement/test/${process.name}")
         .contentType(MediaType.MultipartFormData)
         .multipartBody(
           sttpPrepareMultiParts(
-            "testData"    -> testDataContent,
-            "processJson" -> TestProcessUtil.toJson(process).noSpaces
+            "testData"      -> testDataContent,
+            "scenarioGraph" -> toJson(process).noSpaces
           )()
         )
         .auth
@@ -404,11 +413,11 @@ class BaseFlowTest
 
     def dynamicServiceParameters: Option[List[String]] = {
       val request = NodeValidationRequest(
-        Processor(nodeUsingDynamicServiceId, ServiceRef("dynamicService", List.empty)),
-        ProcessProperties(StreamMetaData()),
-        Map.empty,
-        None,
-        None
+        nodeData = Processor(nodeUsingDynamicServiceId, ServiceRef("dynamicService", List.empty)),
+        processProperties = ProcessProperties(StreamMetaData()),
+        variableTypes = Map.empty,
+        branchVariableTypes = None,
+        outgoingEdges = None
       )
 
       val response = httpClient.send(
@@ -430,7 +439,8 @@ class BaseFlowTest
     val beforeReload2 = generationTime
     beforeReload shouldBe beforeReload2
     // process without errors - no parameter required
-    saveProcess(processWithService()).errors shouldBe ValidationErrors.success
+    val saveProcessResult = saveProcess(processWithService())
+    saveProcessResult.errors shouldBe ValidationErrors.success
     val dynamicServiceParametersBeforeReload = dynamicServiceParameters
     val testDataContent                      = """{"sourceId":"start","record":"field1|field2"}"""
 
@@ -492,23 +502,39 @@ class BaseFlowTest
   }
 
   private def saveProcess(process: CanonicalProcess) = {
-    val response = httpClient.send(
-      quickRequest.auth
-        .basic("admin", "admin")
-        .post(uri"$nuDesignerHttpAddress/api/processes/${process.id}/Category1?isFragment=false")
-    )
-    response.code shouldEqual StatusCode.Created
+    createProcess(process.name)
     updateProcess(process)
   }
 
+  private def createProcess(name: ProcessName) = {
+    val createCommand = CreateScenarioCommand(
+      name,
+      Some(Category1.stringify),
+      processingMode = None,
+      engineSetupName = None,
+      isFragment = false,
+      forwardedUserName = None
+    )
+    val response = httpClient.send(
+      quickRequest
+        .post(uri"$nuDesignerHttpAddress/api/processes/${name.value}/${Category1.stringify}?isFragment=false")
+        .auth
+        .basic("admin", "admin")
+        .post(uri"$nuDesignerHttpAddress/api/processes")
+        .contentType(MediaType.ApplicationJson)
+        .body(createCommand.asJson.spaces2)
+    )
+    response.code shouldEqual StatusCode.Created
+  }
+
   private def updateProcess(process: CanonicalProcess) = {
-    val processId = process.id
+    val processId = process.name
     val response = httpClient.send(
       quickRequest.auth
         .basic("admin", "admin")
         .put(uri"$nuDesignerHttpAddress/api/processes/$processId")
         .contentType(MediaType.ApplicationJson)
-        .body(TestFactory.posting.toJsonAsProcessToSave(process).spaces2)
+        .body(process.toJsonAsProcessToSave.spaces2)
         .response(asJson[ValidationResult])
     )
     response.code shouldEqual StatusCode.Ok
@@ -516,17 +542,17 @@ class BaseFlowTest
   }
 
   private def testProcess(process: CanonicalProcess, data: String): Json = {
-    val displayableProcess =
-      ProcessConverter.toDisplayable(process, TestProcessingTypes.Streaming, TestCategories.Category1)
+    val scenarioGraph =
+      CanonicalProcessConverter.toScenarioGraph(process)
 
     val response = httpClient.send(
       quickRequest
-        .post(uri"$nuDesignerHttpAddress/api/processManagement/test/${process.id}")
+        .post(uri"$nuDesignerHttpAddress/api/processManagement/test/${process.name}")
         .contentType(MediaType.MultipartFormData)
         .multipartBody(
           sttpPrepareMultiParts(
-            "testData"    -> data,
-            "processJson" -> displayableProcess.asJson.noSpaces
+            "testData"      -> data,
+            "scenarioGraph" -> scenarioGraph.asJson.noSpaces
           )()
         )
         .auth

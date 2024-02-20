@@ -4,19 +4,19 @@ import org.scalatest.exceptions.TestFailedException
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, OptionValues}
-import pl.touk.nussknacker.engine.api.component.ComponentType
-import pl.touk.nussknacker.engine.api.displayedgraph.DisplayableProcess
+import pl.touk.nussknacker.engine.api.component.{ComponentId, ComponentType}
 import pl.touk.nussknacker.engine.api.process.{ProcessId, ProcessIdWithName, ProcessName, VersionId}
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
-import pl.touk.nussknacker.restmodel.component.{ComponentIdParts, ScenarioComponentsUsages}
-import pl.touk.nussknacker.restmodel.scenariodetails
+import pl.touk.nussknacker.restmodel.component.ScenarioComponentsUsages
 import pl.touk.nussknacker.security.Permission
 import pl.touk.nussknacker.test.PatientScalaFutures
-import pl.touk.nussknacker.ui.api.helpers.TestFactory.mapProcessingTypeDataProvider
-import pl.touk.nussknacker.ui.api.helpers._
+import pl.touk.nussknacker.test.utils.domain.TestFactory.mapProcessingTypeDataProvider
+import pl.touk.nussknacker.test.base.db.WithHsqlDbTesting
+import pl.touk.nussknacker.test.config.WithSimplifiedDesignerConfig.TestCategory
+import pl.touk.nussknacker.test.utils.domain.{ProcessTestData, TestFactory}
 import pl.touk.nussknacker.ui.process.ScenarioQuery
-import pl.touk.nussknacker.ui.process.processingtypedata.MapBasedProcessingTypeDataProvider
+import pl.touk.nussknacker.ui.process.processingtype.ProcessingTypeDataProvider
 import pl.touk.nussknacker.ui.process.repository.DbProcessActivityRepository.Comment
 import pl.touk.nussknacker.ui.process.repository.ProcessDBQueryRepository.ProcessAlreadyExists
 import pl.touk.nussknacker.ui.process.repository.ProcessRepository.{
@@ -37,22 +37,19 @@ class DBFetchingProcessRepositorySpec
     with BeforeAndAfterEach
     with BeforeAndAfterAll
     with WithHsqlDbTesting
-    with PatientScalaFutures
-    with TestPermissions {
-
-  import cats.syntax.either._
+    with PatientScalaFutures {
 
   private val dbioRunner = DBIOActionRunner(testDbRef)
 
   private val writingRepo =
-    new DBProcessRepository(testDbRef, mapProcessingTypeDataProvider(TestProcessingTypes.Streaming -> 0)) {
+    new DBProcessRepository(testDbRef, mapProcessingTypeDataProvider("Streaming" -> 0)) {
       override protected def now: Instant = currentTime
     }
 
   private var currentTime: Instant = Instant.now()
 
   private val actions =
-    DbProcessActionRepository.create(testDbRef, MapBasedProcessingTypeDataProvider.withEmptyCombinedData(Map.empty))
+    new DbProcessActionRepository(testDbRef, ProcessingTypeDataProvider.withEmptyCombinedData(Map.empty))
 
   private val fetching = DBFetchingProcessRepository.createFutureRepository(testDbRef, actions)
 
@@ -62,30 +59,34 @@ class DBFetchingProcessRepositorySpec
 
   test("fetch processes for category") {
 
-    def saveProcessForCategory(cat: String) = {
+    def saveProcessForCategory(category: String) = {
       saveProcess(
         ScenarioBuilder
-          .streaming(s"categorized-$cat")
+          .streaming(s"categorized-$category")
           .source("s", "")
           .emptySink("sink", ""),
         Instant.now(),
-        category = cat
+        category = category
       )
     }
 
-    val c1Reader = TestFactory.user(permissions = "c1" -> Permission.Read)
+    val c1Reader = LoggedUser(
+      id = "1",
+      username = "user",
+      categoryPermissions = Map("Category1" -> Set(Permission.Read))
+    )
 
-    saveProcessForCategory("c1")
-    saveProcessForCategory("c2")
+    saveProcessForCategory("Category1")
+    saveProcessForCategory("Category2")
     val processes = fetching
-      .fetchProcessesDetails(ScenarioQuery(isArchived = Some(false)))(
+      .fetchLatestProcessesDetails(ScenarioQuery(isArchived = Some(false)))(
         ScenarioShapeFetchStrategy.NotFetch,
         c1Reader,
         implicitly[ExecutionContext]
       )
       .futureValue
 
-    processes.map(_.name.value) shouldEqual "categorized-c1" :: Nil
+    processes.map(_.name.value) shouldEqual "categorized-Category1" :: Nil
   }
 
   test("should rename process") {
@@ -113,7 +114,7 @@ class DBFetchingProcessRepositorySpec
     processExists(newName) shouldBe false
 
     val before = fetchMetaDataIdsForAllVersions(oldName)
-    before.toSet shouldBe Set(oldName.value)
+    before.toSet shouldBe Set(oldName)
 
     renameProcess(oldName, newName)
 
@@ -125,7 +126,7 @@ class DBFetchingProcessRepositorySpec
     val newAfter = fetchMetaDataIdsForAllVersions(newName)
     oldAfter.length shouldBe 0
     newAfter.length shouldBe before.length
-    newAfter.toSet shouldBe Set(newName.value)
+    newAfter.toSet shouldBe Set(newName)
   }
 
   // TODO: remove this in favour of process-audit-log
@@ -146,11 +147,11 @@ class DBFetchingProcessRepositorySpec
 
     val comments = fetching
       .fetchProcessId(newName)
-      .flatMap(v => activities.findActivity(ProcessIdWithName(v.get, newName)).map(_.comments))
+      .flatMap(v => activities.findActivity(v.get).map(_.comments))
       .futureValue
 
     atLeast(1, comments) should matchPattern {
-      case Comment(_, "newName", VersionId(1L), "Rename: [oldName] -> [newName]", user.username, _) =>
+      case Comment(_, VersionId(1L), "Rename: [oldName] -> [newName]", user.username, _) =>
     }
   }
 
@@ -259,8 +260,8 @@ class DBFetchingProcessRepositorySpec
     val latestDetails = fetchLatestProcessDetails[ScenarioComponentsUsages](processName)
     latestDetails.json shouldBe ScenarioComponentsUsages(
       Map(
-        ComponentIdParts(Some("source"), ComponentType.Source) -> List("source1"),
-        ComponentIdParts(Some("sink"), ComponentType.Sink)     -> List("sink1"),
+        ComponentId(ComponentType.Source, "source") -> List("source1"),
+        ComponentId(ComponentType.Sink, "sink")     -> List("sink1"),
       )
     )
 
@@ -273,8 +274,8 @@ class DBFetchingProcessRepositorySpec
 
     fetchLatestProcessDetails[ScenarioComponentsUsages](processName).json shouldBe ScenarioComponentsUsages(
       Map(
-        ComponentIdParts(Some("source"), ComponentType.Source)  -> List("source1"),
-        ComponentIdParts(Some("otherSink"), ComponentType.Sink) -> List("sink1"),
+        ComponentId(ComponentType.Source, "source")  -> List("source1"),
+        ComponentId(ComponentType.Sink, "otherSink") -> List("sink1"),
       )
     )
   }
@@ -298,13 +299,17 @@ class DBFetchingProcessRepositorySpec
     dbioRunner.runInTransaction(writingRepo.updateProcess(action)).futureValue
   }
 
-  private def saveProcess(espProcess: CanonicalProcess, now: Instant = Instant.now(), category: String = "") = {
+  private def saveProcess(
+      process: CanonicalProcess,
+      now: Instant = Instant.now(),
+      category: String = "Category1"
+  ) = {
     currentTime = now
     val action = CreateProcessAction(
-      ProcessName(espProcess.id),
+      process.name,
       category,
-      espProcess,
-      TestProcessingTypes.Streaming,
+      process,
+      "Streaming",
       isFragment = false,
       forwardedUserName = None
     )
@@ -312,7 +317,7 @@ class DBFetchingProcessRepositorySpec
     dbioRunner.runInTransaction(writingRepo.saveNewProcess(action)).futureValue
   }
 
-  private def renameProcess(processName: ProcessName, newName: ProcessName) = {
+  private def renameProcess(processName: ProcessName, newName: ProcessName): Unit = {
     val processId = fetching.fetchProcessId(processName).futureValue.get
     dbioRunner
       .runInTransaction(writingRepo.renameProcess(ProcessIdWithName(processId, processName), newName))
@@ -322,11 +327,10 @@ class DBFetchingProcessRepositorySpec
   private def fetchMetaDataIdsForAllVersions(name: ProcessName) = {
     fetching.fetchProcessId(name).futureValue.toSeq.flatMap { processId =>
       fetching
-        .fetchProcessesDetails[DisplayableProcess](ScenarioQuery.unarchived)
+        .fetchLatestProcessesDetails[Unit](ScenarioQuery.unarchived)
         .futureValue
         .filter(_.processId.value == processId.value)
-        .map(_.json)
-        .map(_.metaData.id)
+        .map(_.name)
     }
   }
 

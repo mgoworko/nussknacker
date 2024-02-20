@@ -1,48 +1,84 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { FragmentValidation, onChangeType } from "../../../item";
-import { SettingRow, fieldLabel } from "./StyledSettingsComponnets";
-import { ExpressionLang } from "../../../../editors/expression/types";
-import { VariableTypes } from "../../../../../../../types";
+import { FieldName, onChangeType, ValueCompileTimeValidation } from "../../../item";
+import { fieldLabel } from "./StyledSettingsComponnets";
+import { NodeValidationError, ReturnedType, VariableTypes } from "../../../../../../../types";
 import EditableEditor from "../../../../editors/EditableEditor";
 import { NodeInput } from "../../../../../../withFocus";
+import { getValidationErrorsForField } from "../../../../editors/Validators";
+import { FormControl } from "@mui/material";
+import { useSelector } from "react-redux";
+import { getProcessDefinitionData } from "../../../../../../../reducers/selectors/settings";
 
-interface ValidationFields extends Omit<FragmentValidation, "validation"> {
+interface ValidationFields extends ValueCompileTimeValidation {
+    variableTypes: VariableTypes;
     onChange: (path: string, value: onChangeType) => void;
     path: string;
-    variableTypes: VariableTypes;
     readOnly: boolean;
+    errors: NodeValidationError[];
+    name: string;
+    typ: ReturnedType;
 }
 
 export default function ValidationFields({
-    validationErrorMessage,
     validationExpression,
+    validationFailedMessage,
     variableTypes,
     path,
     onChange,
     readOnly,
+    errors,
+    name,
+    typ,
 }: ValidationFields) {
     const { t } = useTranslation();
+    const definitionData = useSelector(getProcessDefinitionData);
+
+    const validationExpressionFieldName: FieldName = `$param.${name}.$validationExpression`;
+
+    const extendedVariableType = useMemo(
+        () => ({
+            ...variableTypes,
+            value: definitionData.classes.find((typesInformationType) => typesInformationType.refClazzName === typ.refClazzName),
+        }),
+        [definitionData.classes, typ.refClazzName, variableTypes],
+    );
+
     return (
         <>
             <EditableEditor
-                fieldName="validationExpression"
                 fieldLabel={t("fragment.validation.validationExpression", "Validation expression:")}
-                renderFieldLabel={() => fieldLabel(t("fragment.validation.validationExpression", "Validation expression:"))}
-                expressionObj={{ language: ExpressionLang.SpEL, expression: validationExpression }}
-                onValueChange={(value) => onChange(`${path}.validationExpression`, value)}
-                variableTypes={variableTypes}
+                renderFieldLabel={() =>
+                    fieldLabel({ label: t("fragment.validation.validationExpression", "Validation expression:"), required: true })
+                }
+                expressionObj={validationExpression}
+                onValueChange={(value) => onChange(`${path}.valueCompileTimeValidation.validationExpression.expression`, value)}
+                variableTypes={extendedVariableType}
                 readOnly={readOnly}
+                fieldErrors={getValidationErrorsForField(errors, validationExpressionFieldName)}
+                showValidation
             />
-            <SettingRow>
-                {fieldLabel(t("fragment.validation.validationErrorMessage", "Validation error message:"))}
+            <FormControl>
+                {fieldLabel({
+                    label: t("fragment.validation.validationErrorMessage", "Validation error message:"),
+                    hintText: t(
+                        "fragment.validation.validationErrorMessageHintText",
+                        "An empty value means that the validation error message will be generated dynamically based on the validation expression.",
+                    ),
+                })}
                 <NodeInput
                     style={{ width: "70%" }}
-                    value={validationErrorMessage}
-                    onChange={(event) => onChange(`${path}.validationErrorMessage`, event.currentTarget.value)}
+                    value={validationFailedMessage}
+                    onChange={(event) =>
+                        onChange(
+                            `${path}.valueCompileTimeValidation.validationFailedMessage`,
+                            event.currentTarget.value === "" ? null : event.currentTarget.value,
+                        )
+                    }
                     readOnly={readOnly}
+                    placeholder={t("fragment.validation.validationErrorMessagePlaceholder", "eg. Parameter value is not valid.")}
                 />
-            </SettingRow>
+            </FormControl>
         </>
     );
 }

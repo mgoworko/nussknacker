@@ -15,12 +15,15 @@ import pl.touk.nussknacker.engine.api.typed.typing.Typed
 import pl.touk.nussknacker.engine.api.{Documentation, HideToString, ParamName}
 import pl.touk.nussknacker.engine.util.MathUtils
 import pl.touk.nussknacker.engine.util.functions.numeric.{
+  LargeFloatingNumberOperatorTypingFunction,
   LargeNumberOperatorTypingFunction,
   MathOperatorTypingFunction,
   MinMaxTypingFunction,
   SingleArgumentMathTypingFunction,
   ToNumberTypingFunction
 }
+
+import scala.util.{Success, Try}
 
 trait numeric extends MathUtils with HideToString {
   @GenericType(typingFunction = classOf[MinMaxTypingFunction])
@@ -56,7 +59,24 @@ trait numeric extends MathUtils with HideToString {
   @Documentation(description = "Parse string to number")
   @GenericType(typingFunction = classOf[ToNumberTypingFunction])
   def toNumber(@ParamName("stringOrNumber") stringOrNumber: Any): java.lang.Number = stringOrNumber match {
-    case s: CharSequence     => new java.math.BigDecimal(s.toString)
+    case s: CharSequence =>
+      val ss = s.toString
+
+      // we pick the narrowest type as possible to reduce the amount of memory and computations overheads
+      val tries: List[Try[java.lang.Number]] = List(
+        Try(java.lang.Integer.parseInt(ss)),
+        Try(java.lang.Long.parseLong(ss)),
+        Try(java.lang.Double.parseDouble(ss)),
+        Try(new java.math.BigDecimal(ss)),
+        Try(new java.math.BigInteger(ss))
+      )
+
+      tries
+        .collectFirst { case Success(value) =>
+          value
+        }
+        .getOrElse(new java.math.BigDecimal(ss))
+
     case n: java.lang.Number => n
   }
 
@@ -147,6 +167,11 @@ object numeric extends numeric {
   private class LargeNumberOperatorTypingFunction extends OperatorTypingFunction {
     override protected def numberTypesPromotionStrategy: NumberTypesPromotionStrategy =
       NumberTypesPromotionStrategy.ForLargeNumbersOperation
+  }
+
+  private class LargeFloatingNumberOperatorTypingFunction extends OperatorTypingFunction {
+    override protected def numberTypesPromotionStrategy: NumberTypesPromotionStrategy =
+      NumberTypesPromotionStrategy.ForLargeFloatingNumbersOperation
   }
 
 }

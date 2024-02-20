@@ -1,5 +1,4 @@
 import { ProcessCounts } from "../../reducers/graph";
-import { Process } from "../../types";
 import {
     injectNode,
     Layout,
@@ -11,9 +10,9 @@ import {
     toggleSelection,
 } from "../../actions/nk";
 import { Capabilities } from "../../reducers/selectors/other";
-import { ProcessType } from "../Process/types";
+import { Scenario } from "../Process/types";
 
-export interface GraphProps {
+type ScenarioGraphProps = {
     nodesConnected: typeof nodesConnected;
     nodesDisconnected: typeof nodesDisconnected;
     layoutChanged: typeof layoutChanged;
@@ -22,21 +21,32 @@ export interface GraphProps {
     resetSelection: typeof resetSelection;
     toggleSelection: typeof toggleSelection;
 
-    processToDisplay: Process;
+    scenario: Scenario;
     divId: string;
     nodeIdPrefixForFragmentTests?: string;
     processCounts: ProcessCounts;
     capabilities: Capabilities;
-    fetchedProcessDetails: ProcessType;
     layout: Layout;
 
     readonly?: boolean;
     nodeSelectionEnabled?: boolean;
     isDraggingOver?: boolean;
-    isFragment?: boolean;
+    isFragment?: false | null;
 
     connectDropTarget;
-}
+};
+
+type FragmentGraphProps = {
+    scenario: Scenario;
+    divId: string;
+    nodeIdPrefixForFragmentTests: string;
+    processCounts: ProcessCounts;
+    layout: Layout;
+    isFragment: true;
+    readonly: true;
+};
+
+export type GraphProps = ScenarioGraphProps | FragmentGraphProps;
 
 export enum Events {
     LINK_CONNECT = "link:connect",

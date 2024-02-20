@@ -1,5 +1,7 @@
 package pl.touk.nussknacker.ui
 
+import pl.touk.nussknacker.ui.security.api.LoggedUser
+
 object NuDesignerError {
 
   type XError[A] = Either[NuDesignerError, A]
@@ -15,6 +17,12 @@ abstract class NotFoundError(message: String, cause: Throwable) extends NuDesign
 }
 
 abstract class BadRequestError(message: String, cause: Throwable) extends NuDesignerError(message, cause) {
+  def this(message: String) = this(message, null)
+}
+
+class UnauthorizedError(message: String, cause: Throwable) extends NuDesignerError(message, cause) {
+  def this(user: LoggedUser) =
+    this(s"The supplied user [${user.username}] is not authorized to access this resource", null)
   def this(message: String) = this(message, null)
 }
 

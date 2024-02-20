@@ -202,6 +202,8 @@ describe("Process", () => {
         it("should have counts button and modal", () => {
             cy.viewport("macbook-15");
 
+            // Collapse toolbar to make counts button visible
+            cy.contains(/^scenario details$/i).click();
             cy.contains(/^counts$/i).as("button");
             cy.get("@button").should("be.visible").matchImage();
             cy.get("@button").click();
@@ -259,8 +261,8 @@ describe("Process", () => {
     });
 
     it("should preserve condition on link move (switch)", () => {
-        cy.intercept("POST", "/api/*Validation", (req) => {
-            if (req.body.edges.length == 3) {
+        cy.intercept("POST", "/api/*Validation/*", (req) => {
+            if (req.body.scenarioGraph.edges.length == 3) {
                 req.alias = "validation";
             }
         });
@@ -311,8 +313,8 @@ describe("Process", () => {
     });
 
     it("should preserve condition on link move (filter)", () => {
-        cy.intercept("POST", "/api/*Validation", (req) => {
-            if (req.body.edges.length == 2) {
+        cy.intercept("POST", "/api/*Validation/*", (req) => {
+            if (req.body.scenarioGraph.edges.length == 2) {
                 req.alias = "validation";
             }
         });
@@ -368,16 +370,16 @@ describe("Process", () => {
             cy.contains("svg", /filter/i).click();
             cy.contains("button", "copy").click();
             cy.contains("button", "paste").click();
-            cy.contains("Loose nodes: filter (copy 1)").should("be.visible");
+            cy.contains("Loose node: filter (copy 1)").should("be.visible");
         };
 
         const copyAndPasteWholeScenario = () => {
             cy.get("#nk-graph-main").type("{ctrl}a");
             cy.contains("button", "copy").click();
             cy.contains("button", "delete").click();
-            cy.contains("Loose nodes: filter (copy 1)").should("not.exist");
+            cy.contains("Loose node: filter (copy 1)").should("not.exist");
             cy.contains("button", "paste").click();
-            cy.contains("Loose nodes: filter (copy 1)").should("be.visible");
+            cy.contains("Loose node: filter (copy 1)").should("be.visible");
         };
 
         pasteNewNodeToScenario();
@@ -423,5 +425,16 @@ describe("Process", () => {
                     expect($current.height()).to.equal(height);
                 });
             });
+    });
+
+    it("should open more scenario details", () => {
+        cy.visitNewProcess(seed, "rrEmpty", "RequestResponse");
+        cy.viewport(1500, 800);
+        cy.layoutScenario();
+
+        cy.contains("a", "More scenario details").click();
+        cy.get("[data-testid=window]").matchImage({
+            maxDiffThreshold: 0.02,
+        });
     });
 });

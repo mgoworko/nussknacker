@@ -6,18 +6,16 @@ import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.scalatest.Inside
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
+import pl.touk.nussknacker.engine.api.component.ComponentDefinition
 import pl.touk.nussknacker.engine.api.process._
 import pl.touk.nussknacker.engine.api.typed.typing.Typed
-import pl.touk.nussknacker.engine.api.{ProcessListener, ProcessVersion}
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.compile.ProcessValidator
-import pl.touk.nussknacker.engine.deployment.DeploymentData
 import pl.touk.nussknacker.engine.flink.test.FlinkSpec
 import pl.touk.nussknacker.engine.flink.util.source.EmitWatermarkAfterEachElementCollectionSource
-import pl.touk.nussknacker.engine.process.ExecutionConfigPreparer
-import pl.touk.nussknacker.engine.process.compiler.FlinkProcessCompiler
-import pl.touk.nussknacker.engine.process.registrar.FlinkProcessRegistrar
+import pl.touk.nussknacker.engine.process.helpers.ConfigCreatorWithCollectingListener
+import pl.touk.nussknacker.engine.process.runner.UnitTestsFlinkRunner
 import pl.touk.nussknacker.engine.spel.Implicits._
 import pl.touk.nussknacker.engine.testing.LocalModelData
 import pl.touk.nussknacker.engine.testmode._
@@ -61,7 +59,8 @@ class ForEachTransformerSpec extends AnyFunSuite with FlinkSpec with Matchers wi
       aProcessWithForEachNode(elements = "{'one', 'other'}", resultExpression = s"#$forEachOutputVariableName + '_1'")
     val processValidator = ProcessValidator.default(model)
 
-    val forEachResultValidationContext = processValidator.validate(testProcess).typing(forEachNodeResultId)
+    val forEachResultValidationContext =
+      processValidator.validate(testProcess, isFragment = false).typing(forEachNodeResultId)
     forEachResultValidationContext.inputValidationContext.get(forEachOutputVariableName) shouldBe Some(Typed[String])
   }
 
@@ -75,17 +74,28 @@ class ForEachTransformerSpec extends AnyFunSuite with FlinkSpec with Matchers wi
     results.nodeResults shouldNot contain key sinkId
   }
 
-  private def initializeListener = ResultsCollectingListenerHolder.registerRun(identity)
+  private def initializeListener = ResultsCollectingListenerHolder.registerRun
 
   private def modelData(
       list: List[TestRecord] = List(),
       collectingListener: ResultsCollectingListener
-  ): LocalModelData = LocalModelData(
-    ConfigFactory
+  ): LocalModelData = {
+    val modelConfig = ConfigFactory
       .empty()
-      .withValue("useTypingResultTypeInformation", fromAnyRef(true)),
-    new Creator(list, collectingListener)
-  )
+      .withValue("useTypingResultTypeInformation", fromAnyRef(true))
+    val sourceComponent = ComponentDefinition(
+      "start",
+      SourceFactory.noParamUnboundedStreamFactory[TestRecord](
+        EmitWatermarkAfterEachElementCollectionSource
+          .create[TestRecord](list, _.timestamp, Duration.ofHours(1))(TypeInformation.of(classOf[TestRecord]))
+      )
+    )
+    LocalModelData(
+      modelConfig,
+      sourceComponent :: FlinkBaseComponentProvider.Components,
+      configCreator = new ConfigCreatorWithCollectingListener(collectingListener),
+    )
+  }
 
   private def aProcessWithForEachNode(elements: String, resultExpression: String = s"#$forEachOutputVariableName") =
     ScenarioBuilder
@@ -101,48 +111,25 @@ class ForEachTransformerSpec extends AnyFunSuite with FlinkSpec with Matchers wi
       model: LocalModelData,
       testProcess: CanonicalProcess,
       collectingListener: ResultsCollectingListener
-  ): TestProcess.TestResults[Any] = {
+  ): TestProcess.TestResults = {
     runProcess(model, testProcess)
-    collectingListener.results[Any]
+    collectingListener.results
   }
 
-  private def extractResultValues(results: TestProcess.TestResults[Any]): List[String] = results
+  private def extractResultValues(results: TestProcess.TestResults): List[String] = results
     .nodeResults(sinkId)
-    .map(_.variableTyped[String](resultVariableName).get)
+    .map(_.get[String](resultVariableName).get)
 
-  private def extractContextIds(results: TestProcess.TestResults[Any]): List[String] = results
+  private def extractContextIds(results: TestProcess.TestResults): List[String] = results
     .nodeResults(forEachNodeResultId)
-    .map(_.context.id)
+    .map(_.id)
 
   private def runProcess(model: LocalModelData, testProcess: CanonicalProcess): Unit = {
     val stoppableEnv = flinkMiniCluster.createExecutionEnvironment()
-    val registrar =
-      FlinkProcessRegistrar(new FlinkProcessCompiler(model), ExecutionConfigPreparer.unOptimizedChain(model))
-    registrar.register(stoppableEnv, testProcess, ProcessVersion.empty, DeploymentData.empty)
-    stoppableEnv.executeAndWaitForFinished(testProcess.id)()
+    UnitTestsFlinkRunner.registerInEnvironmentWithModel(stoppableEnv, model)(testProcess)
+    stoppableEnv.executeAndWaitForFinished(testProcess.name.value)()
   }
 
-}
-
-class Creator(input: List[TestRecord], collectingListener: ResultsCollectingListener)
-    extends EmptyProcessConfigCreator {
-
-  override def sourceFactories(
-      processObjectDependencies: ProcessObjectDependencies
-  ): Map[String, WithCategories[SourceFactory]] = {
-    implicit val testRecordTypeInfo: TypeInformation[TestRecord] = TypeInformation.of(classOf[TestRecord])
-    Map(
-      "start" -> WithCategories.anyCategory(
-        SourceFactory.noParam[TestRecord](
-          EmitWatermarkAfterEachElementCollectionSource
-            .create[TestRecord](input, _.timestamp, Duration.ofHours(1))
-        )
-      )
-    )
-  }
-
-  override def listeners(processObjectDependencies: ProcessObjectDependencies): Seq[ProcessListener] =
-    List(collectingListener)
 }
 
 case class TestRecord(id: String = "1", timeHours: Int = 0, eId: Int = 1, str: String = "a") {

@@ -1,18 +1,23 @@
 package pl.touk.nussknacker.engine.compile
 
-import scala.jdk.CollectionConverters._
-import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.config.ConfigValueFactory.{fromAnyRef, fromIterable}
+import com.typesafe.config.{Config, ConfigFactory}
 import org.scalatest.Inside
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.prop.{TableDrivenPropertyChecks, TableFor1}
 import pl.touk.nussknacker.engine.api._
+import pl.touk.nussknacker.engine.api.component.{
+  ComponentAdditionalConfig,
+  ComponentDefinition,
+  DesignerWideComponentId,
+  ParameterAdditionalUIConfig
+}
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError._
-import pl.touk.nussknacker.engine.api.context.{OutputVar, ProcessCompilationError, ValidationContext}
-import pl.touk.nussknacker.engine.api.definition.{DualParameterEditor, StringParameterEditor}
+import pl.touk.nussknacker.engine.api.context.{ProcessCompilationError, ValidationContext}
+import pl.touk.nussknacker.engine.api.definition._
 import pl.touk.nussknacker.engine.api.editor.DualEditorMode
-import pl.touk.nussknacker.engine.api.process._
+import pl.touk.nussknacker.engine.api.parameter.{ParameterValueCompileTimeValidation, ValueInputWithFixedValuesProvided}
 import pl.touk.nussknacker.engine.api.typed.typing
 import pl.touk.nussknacker.engine.api.typed.typing.{Typed, TypedObjectTypingResult, Unknown}
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
@@ -25,17 +30,13 @@ import pl.touk.nussknacker.engine.compile.nodecompilation.{
   ValidationResponse
 }
 import pl.touk.nussknacker.engine.compile.validationHelpers._
+import pl.touk.nussknacker.engine.definition.component.parameter.validator.ValidationExpressionParameterValidator
 import pl.touk.nussknacker.engine.graph.EdgeType.{FragmentOutput, NextSwitch}
-import pl.touk.nussknacker.engine.graph.evaluatedparam.Parameter
+import pl.touk.nussknacker.engine.graph.evaluatedparam.{Parameter => NodeParameter}
 import pl.touk.nussknacker.engine.graph.expression.{Expression, NodeExpressionId}
 import pl.touk.nussknacker.engine.graph.fragment.FragmentRef
 import pl.touk.nussknacker.engine.graph.node
-import pl.touk.nussknacker.engine.graph.node.FragmentInputDefinition.{
-  FixedExpressionValue,
-  FragmentClazzRef,
-  FragmentParameter,
-  ValueInputWithFixedValuesProvided
-}
+import pl.touk.nussknacker.engine.graph.node.FragmentInputDefinition.{FragmentClazzRef, FragmentParameter}
 import pl.touk.nussknacker.engine.graph.node._
 import pl.touk.nussknacker.engine.graph.service.ServiceRef
 import pl.touk.nussknacker.engine.graph.sink.SinkRef
@@ -45,11 +46,15 @@ import pl.touk.nussknacker.engine.spel.Implicits._
 import pl.touk.nussknacker.engine.testing.LocalModelData
 import pl.touk.nussknacker.engine.util.Implicits.RichScalaMap
 
+import scala.jdk.CollectionConverters._
+
 class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with TableDrivenPropertyChecks {
 
   private val defaultConfig: Config = List("genericParametersSource", "genericParametersSink", "genericTransformer")
     .foldLeft(ConfigFactory.empty())((c, n) =>
-      c.withValue(s"componentsUiConfig.$n.params.par1.defaultValue", fromAnyRef("'realDefault'"))
+      c
+        .withValue(s"componentsUiConfig.$n.params.par1.defaultValue", fromAnyRef("'realDefault'"))
+        .withValue(s"componentsUiConfig.$n.params.par1.label", fromAnyRef("Parameter 1"))
     )
 
   private val defaultFragmentId: String = "fragment1"
@@ -67,39 +72,27 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
   def getModelData(aConfig: Config = defaultConfig): LocalModelData = {
     LocalModelData(
       aConfig,
-      new EmptyProcessConfigCreator {
-        override def customStreamTransformers(
-            processObjectDependencies: ProcessObjectDependencies
-        ): Map[String, WithCategories[CustomStreamTransformer]] = Map(
-          "genericJoin"        -> WithCategories.anyCategory(DynamicParameterJoinTransformer),
-          "genericTransformer" -> WithCategories.anyCategory(GenericParametersTransformer),
-          "genericTransformerUsingParameterValidator" -> WithCategories.anyCategory(
-            GenericParametersTransformerUsingParameterValidator
+      List(
+        ComponentDefinition("genericJoin", DynamicParameterJoinTransformer),
+        ComponentDefinition("genericTransformer", GenericParametersTransformer),
+        ComponentDefinition(
+          "genericTransformerUsingParameterValidator",
+          GenericParametersTransformerUsingParameterValidator
+        ),
+        ComponentDefinition("stringService", SimpleStringService),
+        ComponentDefinition("genericParametersThrowingException", GenericParametersThrowingException),
+        ComponentDefinition("missingParamHandleGenericNodeTransformation", MissingParamHandleDynamicComponent$),
+        ComponentDefinition("genericParametersSource", new GenericParametersSource),
+        ComponentDefinition("genericParametersSink", GenericParametersSink),
+        ComponentDefinition("optionalParameterService", OptionalParameterService)
+      ),
+      additionalConfigsFromProvider = Map(
+        DesignerWideComponentId("streaming-service-optionalParameterService") -> ComponentAdditionalConfig(
+          parameterConfigs = Map(
+            "optionalParam" -> ParameterAdditionalUIConfig(required = true, None, None, None, None)
           )
         )
-
-        override def services(
-            processObjectDependencies: ProcessObjectDependencies
-        ): Map[String, WithCategories[Service]] = Map(
-          "stringService"                      -> WithCategories.anyCategory(SimpleStringService),
-          "genericParametersThrowingException" -> WithCategories.anyCategory(GenericParametersThrowingException),
-          "missingParamHandleGenericNodeTransformation" -> WithCategories.anyCategory(
-            MissingParamHandleGenericNodeTransformation
-          )
-        )
-
-        override def sourceFactories(
-            processObjectDependencies: ProcessObjectDependencies
-        ): Map[String, WithCategories[SourceFactory]] = Map(
-          "genericParametersSource" -> WithCategories.anyCategory(new GenericParametersSource)
-        )
-
-        override def sinkFactories(
-            processObjectDependencies: ProcessObjectDependencies
-        ): Map[String, WithCategories[SinkFactory]] = Map(
-          "genericParametersSink" -> WithCategories.anyCategory(GenericParametersSink)
-        )
-      }
+      )
     )
   }
 
@@ -111,7 +104,12 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
         "tst1",
         SinkRef(
           "genericParametersSink",
-          List(par("par1", "'a,b'"), par("lazyPar1", "#aVar + 3"), par("a", "'a'"), par("b", "'dd'"))
+          List(
+            par("par1", "'a,b'"),
+            par("lazyPar1", "#aVar + 3"),
+            par("a", "'a'"),
+            par("b", "'dd'")
+          )
         )
       ),
       ValidationContext(Map("aVar" -> Typed[Long]))
@@ -283,7 +281,8 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
         ),
         ValidationContext.empty
       )
-    ) { case ValidationPerformed(`expectedError` :: Nil, parameters, _) =>
+    ) { case ValidationPerformed(err :: Nil, _, _) =>
+      err shouldBe expectedError
     }
   }
 
@@ -329,7 +328,7 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
 
   test("should not allow to use special chars in variable name") {
     inside(validate(Variable("var1", "var@ 2", "42L", None), ValidationContext())) {
-      case ValidationPerformed(InvalidVariableOutputName("var@ 2", "var1", _) :: Nil, None, _) =>
+      case ValidationPerformed(InvalidVariableName("var@ 2", "var1", _) :: Nil, None, _) =>
     }
   }
 
@@ -361,7 +360,7 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
   test("should not allow duplicated field names in variable builder") {
     inside(
       validate(
-        VariableBuilder("mapVariable", "var1", Field("field", "null") :: Field("field", "null") :: Nil),
+        VariableBuilder("recordVariable", "var1", Field("field", "null") :: Field("field", "null") :: Nil),
         ValidationContext.empty
       )
     ) {
@@ -370,12 +369,12 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
               "The key of a record has to be unique",
               _,
               "$fields-0-$key",
-              "mapVariable"
+              "recordVariable"
             ) :: CustomParameterValidationError(
               "The key of a record has to be unique",
               _,
               "$fields-1-$key",
-              "mapVariable"
+              "recordVariable"
             ) :: Nil,
             None,
             _
@@ -386,14 +385,18 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
   test("should not allow duplicated field names in variable builder when cannot compile") {
     inside(
       validate(
-        VariableBuilder("mapVariable", "var1", Field("field", "unresolvedReference") :: Field("field", "null") :: Nil),
+        VariableBuilder(
+          "recordVariable",
+          "var1",
+          Field("field", "unresolvedReference") :: Field("field", "null") :: Nil
+        ),
         ValidationContext.empty
       )
     ) {
       case ValidationPerformed(
             ExpressionParserCompilationError(
               "Non reference 'unresolvedReference' occurred. Maybe you missed '#' in front of it?",
-              "mapVariable",
+              "recordVariable",
               Some("$fields-0-$value"),
               "unresolvedReference"
             ) ::
@@ -401,12 +404,12 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
               "The key of a record has to be unique",
               _,
               "$fields-0-$key",
-              "mapVariable"
+              "recordVariable"
             ) :: CustomParameterValidationError(
               "The key of a record has to be unique",
               _,
               "$fields-1-$key",
-              "mapVariable"
+              "recordVariable"
             ) :: Nil,
             None,
             _
@@ -418,7 +421,7 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
     forAll(ExpressionsTestData.emptyOrBlankExpressions) { e =>
       inside(
         validate(
-          VariableBuilder("mapVariable", "var1", Field("field1", e) :: Field("field2", e) :: Nil),
+          VariableBuilder("recordVariable", "var1", Field("field1", e) :: Field("field2", e) :: Nil),
           ValidationContext.empty
         )
       ) {
@@ -427,12 +430,12 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
                 "This field is mandatory and can not be empty",
                 _,
                 "$fields-0-$value",
-                "mapVariable"
+                "recordVariable"
               ) :: EmptyMandatoryParameter(
                 "This field is mandatory and can not be empty",
                 _,
                 "$fields-1-$value",
-                "mapVariable"
+                "recordVariable"
               ) :: Nil,
               None,
               _
@@ -470,19 +473,22 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
   }
 
   test("should validate fragment parameters") {
-    val expectedMsg = s"Bad expression type, expected: String, found: ${Typed.fromInstance(145).display}"
     inside(
       validate(
-        FragmentInput("frInput", FragmentRef("fragment1", List(Parameter("param1", "145")), Map("out1" -> "test1"))),
+        FragmentInput(
+          "frInput",
+          FragmentRef("fragment1", List(NodeParameter("param1", "145")), Map("out1" -> "test1"))
+        ),
         ValidationContext.empty,
         outgoingEdges = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
       )
     ) {
       case ValidationPerformed(
-            List(ExpressionParserCompilationError(expectedMsg, "frInput", Some("param1"), "145")),
+            List(ExpressionParserCompilationError(message, "frInput", Some("param1"), "145")),
             None,
             None
           ) =>
+        message shouldBe s"Bad expression type, expected: String, found: ${Typed.fromInstance(145).display}"
     }
   }
 
@@ -490,7 +496,7 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
     val defaultFragmentOutgoingEdges: List[OutgoingEdge] = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
     val fragmentId                                       = "fragmentInputId"
     val nodeToBeValidated =
-      FragmentInput("nameOfTheNode", FragmentRef(fragmentId, List(Parameter("P1", "123")), Map("out1" -> "test1")))
+      FragmentInput("nameOfTheNode", FragmentRef(fragmentId, List(NodeParameter("P1", "123")), Map("out1" -> "test1")))
     val fragmentDefinitionWithValidators: CanonicalProcess = CanonicalProcess(
       MetaData(fragmentId, FragmentSpecificData()),
       List(
@@ -513,14 +519,17 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
     }
   }
 
-  test("should validate fragment parameters with validators -  - P1 as mandatory param with missing actual value") {
+  test("should validate fragment parameters with validators - P1 as mandatory param with missing actual value") {
     val fragmentId = "fragmentInputId"
+    val nodeId     = "someNodeId"
     val nodeToBeValidated =
-      FragmentInput("nameOfTheNode", FragmentRef(fragmentId, List(Parameter("P1", "")), Map("out1" -> "test1")))
+      FragmentInput(nodeId, FragmentRef(fragmentId, List(NodeParameter("P1", "")), Map("out1" -> "test1")))
     val fragmentDefinitionWithValidators: CanonicalProcess = CanonicalProcess(
       MetaData(fragmentId, FragmentSpecificData()),
       List(
-        FlatNode(FragmentInputDefinition("in", List(FragmentParameter("P1", FragmentClazzRef[Short])))),
+        FlatNode(
+          FragmentInputDefinition("in", List(FragmentParameter("P1", FragmentClazzRef[Short]).copy(required = true)))
+        ),
         FlatNode(FragmentOutputDefinition("out", "out1", List(Field("strField", "'value'")))),
       )
     )
@@ -529,14 +538,16 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
       fromIterable(List(Map("type" -> "MandatoryParameterValidator").asJava).asJava)
     )
 
-    validate(
-      nodeToBeValidated,
-      ValidationContext.empty,
-      outgoingEdges = defaultFragmentOutgoingEdges,
-      fragmentDefinition = fragmentDefinitionWithValidators,
-      aModelData = getModelData(configWithValidators)
-    ) should matchPattern {
-      case ValidationPerformed(List(EmptyMandatoryParameter(_, _, "P1", fragmentId)), None, None) =>
+    inside(
+      validate(
+        nodeToBeValidated,
+        ValidationContext.empty,
+        outgoingEdges = defaultFragmentOutgoingEdges,
+        fragmentDefinition = fragmentDefinitionWithValidators,
+        aModelData = getModelData(configWithValidators)
+      )
+    ) { case ValidationPerformed(List(EmptyMandatoryParameter(_, _, "P1", returnedNodeId)), None, None) =>
+      returnedNodeId shouldBe nodeId
     }
   }
 
@@ -549,8 +560,8 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
       FragmentRef(
         fragmentId,
         List(
-          Parameter("P1", ""),
-          Parameter("P2", ""),
+          NodeParameter("P1", ""),
+          NodeParameter("P2", ""),
         ),
         Map("out1" -> "test1")
       )
@@ -563,8 +574,8 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
           FragmentInputDefinition(
             "in",
             List(
-              FragmentParameter("P1", FragmentClazzRef[Short]),
-              FragmentParameter("P2", FragmentClazzRef[String])
+              FragmentParameter("P1", FragmentClazzRef[Short]).copy(required = true),
+              FragmentParameter("P2", FragmentClazzRef[String]).copy(required = true)
             )
           )
         ),
@@ -600,22 +611,38 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
     }
   }
 
+  test(
+    "should validate service based on additional config from provider - P1 as mandatory param with missing actual value"
+  ) {
+    val nodeToBeValidated = node.Enricher(
+      "enricherNodeId",
+      ServiceRef("optionalParameterService", List(NodeParameter("optionalParam", Expression.spel("")))),
+      "out"
+    )
+
+    validate(
+      nodeToBeValidated,
+      ValidationContext.empty,
+      outgoingEdges = defaultFragmentOutgoingEdges
+    ) should matchPattern {
+      case ValidationPerformed(List(EmptyMandatoryParameter(_, _, "optionalParam", "enricherNodeId")), None, None) =>
+    }
+  }
+
   test("should validate output parameters") {
-    val incorrectVarName = "very bad var name"
-    val varFieldName     = OutputVar.fragmentOutput("out1", "").fieldName
-    val nodeId           = "frInput"
+    val nodeId = "frInput"
     inside(
       validate(
         FragmentInput(
           nodeId,
-          FragmentRef("fragment1", List(Parameter("param1", "'someValue'")), Map("out1" -> incorrectVarName))
+          FragmentRef("fragment1", List(NodeParameter("param1", "'someValue'")), Map("out1" -> "very bad var name"))
         ),
         ValidationContext.empty,
         outgoingEdges = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
       )
     ) {
       case ValidationPerformed(
-            List(InvalidVariableOutputName(incorrectVarName, nodeId, Some(varFieldName))),
+            List(InvalidVariableName("very bad var name", "frInput", Some("ref.outputVariableNames.out1"))),
             None,
             None
           ) =>
@@ -626,24 +653,32 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
       validate(
         FragmentInput(
           nodeId,
-          FragmentRef("fragment1", List(Parameter("param1", "'someValue'")), Map("out1" -> existingVar))
+          FragmentRef("fragment1", List(NodeParameter("param1", "'someValue'")), Map("out1" -> existingVar))
         ),
         ValidationContext(Map(existingVar -> Typed[String])),
         outgoingEdges = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
       )
-    ) { case ValidationPerformed(List(OverwrittenVariable(existingVar, nodeId, Some(varFieldName))), None, None) =>
+    ) {
+      case ValidationPerformed(
+            List(OverwrittenVariable("var1", "frInput", Some("ref.outputVariableNames.out1"))),
+            None,
+            None
+          ) =>
     }
   }
 
   test("should validate fragment output edges") {
     val nodeId = "frInput"
-    val nodes  = Set("aa")
     inside(
       validate(
-        FragmentInput(nodeId, FragmentRef("fragment1", List(Parameter("param1", "'someValue'")), Map("out1" -> "ok"))),
+        FragmentInput(
+          nodeId,
+          FragmentRef("fragment1", List(NodeParameter("param1", "'someValue'")), Map("out1" -> "ok"))
+        ),
         ValidationContext.empty
       )
     ) { case ValidationPerformed(List(FragmentOutputNotDefined("out1", nodes)), None, None) =>
+      nodes shouldBe Set(nodeId)
     }
 
   }
@@ -713,7 +748,6 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
 
   test("should validate fragment parameter fixed values are of supported type") {
     val nodeId: String = "in"
-    val nodes          = Set(nodeId)
     inside(
       validate(
         FragmentInputDefinition(
@@ -727,10 +761,11 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
               hintText = None,
               valueEditor = Some(
                 ValueInputWithFixedValuesProvided(
-                  fixedValuesList = List(FragmentInputDefinition.FixedExpressionValue("1", "someLabel")),
+                  fixedValuesList = List(FixedExpressionValue("1", "someLabel")),
                   allowOtherValue = false
                 )
-              )
+              ),
+              valueCompileTimeValidation = None
             )
           ),
         ),
@@ -746,12 +781,12 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
             None,
             None
           ) =>
+        nodes shouldBe Set(nodeId)
     }
   }
 
   test("should validate initial value outside possible values in FragmentInputDefinition") {
     val nodeId: String = "in"
-    val nodes          = Set(nodeId)
     inside(
       validate(
         FragmentInputDefinition(
@@ -765,10 +800,11 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
               hintText = None,
               valueEditor = Some(
                 ValueInputWithFixedValuesProvided(
-                  fixedValuesList = List(FragmentInputDefinition.FixedExpressionValue("'someValue'", "someValue")),
+                  fixedValuesList = List(FixedExpressionValue("'someValue'", "someValue")),
                   allowOtherValue = false
                 )
-              )
+              ),
+              valueCompileTimeValidation = None
             )
           ),
         ),
@@ -784,6 +820,7 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
             None,
             None
           ) =>
+        nodes shouldBe Set(nodeId)
     }
   }
 
@@ -802,7 +839,8 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
               required = false,
               initialValue = Some(FixedExpressionValue(stringExpression, "stringButShouldBeBoolean")),
               hintText = None,
-              valueEditor = None
+              valueEditor = None,
+              valueCompileTimeValidation = None
             )
           ),
         ),
@@ -835,7 +873,8 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
                   fixedValuesList = List(FixedExpressionValue(stringExpression, "stringButShouldBeBoolean")),
                   allowOtherValue = false
                 )
-              )
+              ),
+              valueCompileTimeValidation = None
             )
           ),
         ),
@@ -864,7 +903,8 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
               required = false,
               initialValue = None,
               hintText = None,
-              valueEditor = None
+              valueEditor = None,
+              valueCompileTimeValidation = None
             ),
             FragmentParameter(
               "param1",
@@ -872,7 +912,8 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
               required = false,
               initialValue = Some(FixedExpressionValue(referencingExpression, "referencingExpression")),
               hintText = None,
-              valueEditor = None
+              valueEditor = None,
+              valueCompileTimeValidation = None
             )
           ),
         ),
@@ -900,7 +941,8 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
               required = false,
               initialValue = Some(FixedExpressionValue(invalidReferencingExpression, "invalidReferencingExpression")),
               hintText = None,
-              valueEditor = None
+              valueEditor = None,
+              valueCompileTimeValidation = None
             )
           ),
         ),
@@ -929,7 +971,8 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
               required = false,
               initialValue = None,
               hintText = None,
-              valueEditor = None
+              valueEditor = None,
+              valueCompileTimeValidation = None
             )
           ),
         ),
@@ -944,16 +987,323 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
     }
   }
 
+  test("shouldn't fail on valid validation expression") {
+    val nodeId: String = "in"
+    val paramName      = "param1"
+
+    inside(
+      validate(
+        FragmentInputDefinition(
+          nodeId,
+          List(
+            FragmentParameter(
+              paramName,
+              FragmentClazzRef[String],
+              required = false,
+              initialValue = None,
+              hintText = None,
+              valueEditor = None,
+              valueCompileTimeValidation = Some(
+                ParameterValueCompileTimeValidation(
+                  s"#${ValidationExpressionParameterValidator.variableName}.length() < 7",
+                  Some("some failed message")
+                )
+              )
+            )
+          ),
+        ),
+        ValidationContext.empty,
+        Map.empty,
+        outgoingEdges = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
+      )
+    ) { case ValidationPerformed(errors, None, None) =>
+      errors shouldBe empty
+    }
+  }
+
+  test("should fail on blank validation expression") {
+    val blankExpression = "     "
+
+    inside(
+      validate(
+        FragmentInputDefinition(
+          "in",
+          List(
+            FragmentParameter(
+              "param1",
+              FragmentClazzRef[String],
+              required = false,
+              initialValue = None,
+              hintText = None,
+              valueEditor = None,
+              valueCompileTimeValidation = Some(
+                ParameterValueCompileTimeValidation(Expression.spel(blankExpression), Some("some failed message"))
+              ),
+            )
+          ),
+        ),
+        ValidationContext.empty,
+        Map.empty,
+        outgoingEdges = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
+      )
+    ) {
+      case ValidationPerformed(
+            List(
+              InvalidValidationExpression(
+                "Validation expression cannot be blank",
+                "in",
+                "param1",
+                expr
+              )
+            ),
+            None,
+            None
+          ) =>
+        expr shouldBe blankExpression
+    }
+  }
+
+  test("should fail on invalid validation expression") {
+
+    val invalidReference = "#invalidReference"
+
+    inside(
+      validate(
+        FragmentInputDefinition(
+          "in",
+          List(
+            FragmentParameter(
+              "param1",
+              FragmentClazzRef[String],
+              required = false,
+              initialValue = None,
+              hintText = None,
+              valueEditor = None,
+              valueCompileTimeValidation = Some(
+                ParameterValueCompileTimeValidation(Expression.spel(invalidReference), Some("some failed message"))
+              ),
+            )
+          ),
+        ),
+        ValidationContext.empty,
+        Map.empty,
+        outgoingEdges = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
+      )
+    ) {
+      case ValidationPerformed(
+            List(
+              InvalidValidationExpression(
+                "Unresolved reference 'invalidReference'",
+                "in",
+                "param1",
+                expr
+              )
+            ),
+            None,
+            None
+          ) =>
+        expr shouldBe invalidReference
+    }
+  }
+
+  test("should fail on invalid-type validation expression") {
+    val invalidExpression =
+      s"#${ValidationExpressionParameterValidator.variableName} > 0" // invalid operation (comparing string with int)
+
+    inside(
+      validate(
+        FragmentInputDefinition(
+          "in",
+          List(
+            FragmentParameter(
+              "param1",
+              FragmentClazzRef[String],
+              required = false,
+              initialValue = None,
+              hintText = None,
+              valueEditor = None,
+              valueCompileTimeValidation = Some(
+                ParameterValueCompileTimeValidation(
+                  invalidExpression,
+                  Some("some failed message")
+                )
+              )
+            )
+          ),
+        ),
+        ValidationContext.empty,
+        Map.empty,
+        outgoingEdges = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
+      )
+    ) {
+      case ValidationPerformed(
+            List(
+              InvalidValidationExpression(
+                "Wrong part types",
+                "in",
+                "param1",
+                expr
+              )
+            ),
+            None,
+            None
+          ) =>
+        expr shouldBe invalidExpression
+    }
+  }
+
+  test("should fail on non-boolean-result-type validation expression") {
+    val stringExpression = "'a' + 'b'"
+
+    inside(
+      validate(
+        FragmentInputDefinition(
+          "in",
+          List(
+            FragmentParameter(
+              "param1",
+              FragmentClazzRef[String],
+              required = false,
+              initialValue = None,
+              hintText = None,
+              valueEditor = None,
+              valueCompileTimeValidation = Some(
+                ParameterValueCompileTimeValidation(Expression.spel(stringExpression), Some("some failed message"))
+              ),
+            )
+          ),
+        ),
+        ValidationContext.empty,
+        Map.empty,
+        outgoingEdges = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
+      )
+    ) {
+      case ValidationPerformed(
+            List(
+              InvalidValidationExpression(
+                "Bad expression type, expected: Boolean, found: String(ab)",
+                "in",
+                "param1",
+                expr
+              )
+            ),
+            None,
+            None
+          ) =>
+        expr shouldBe stringExpression
+    }
+  }
+
+  test("should return error on invalid parameter name") {
+    inside(
+      validate(
+        FragmentInputDefinition(
+          "in",
+          List(
+            FragmentParameter(
+              "1",
+              FragmentClazzRef[String]
+            )
+          ),
+        ),
+        ValidationContext.empty,
+        Map.empty,
+        outgoingEdges = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
+      )
+    ) {
+      case ValidationPerformed(
+            List(
+              InvalidVariableName(
+                "1",
+                "in",
+                Some("$param.1.$name")
+              )
+            ),
+            None,
+            None
+          ) =>
+    }
+  }
+
+  test("should return error on duplicated parameter name") {
+    val duplicatedParam = FragmentParameter(
+      "paramName",
+      FragmentClazzRef[String]
+    )
+    inside(
+      validate(
+        FragmentInputDefinition(
+          "in",
+          List(
+            duplicatedParam,
+            duplicatedParam
+          ),
+        ),
+        ValidationContext.empty,
+        Map.empty,
+        outgoingEdges = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
+      )
+    ) {
+      case ValidationPerformed(
+            List(
+              DuplicateFragmentInputParameter("paramName", "in")
+            ),
+            None,
+            None
+          ) =>
+    }
+  }
+
+  test("should not return specific errors based on parameter name when parameter names are duplicated") {
+    inside(
+      validate(
+        FragmentInputDefinition(
+          "in",
+          List(
+            FragmentParameter(
+              name = "paramName",
+              typ = FragmentClazzRef[String],
+              initialValue = None,
+              hintText = None,
+              valueEditor = None,
+              valueCompileTimeValidation = Some(
+                ParameterValueCompileTimeValidation(
+                  "invalidExpr",
+                  None
+                )
+              )
+            ),
+            FragmentParameter(
+              "paramName",
+              FragmentClazzRef[String],
+            )
+          ),
+        ),
+        ValidationContext.empty,
+        Map.empty,
+        outgoingEdges = List(OutgoingEdge("any", Some(FragmentOutput("out1"))))
+      )
+    ) {
+      case ValidationPerformed(
+            List(
+              DuplicateFragmentInputParameter("paramName", "in")
+            ),
+            None,
+            None
+          ) =>
+    }
+  }
+
   private def genericParameters = List(
-    definition
-      .Parameter[String]("par1")
+    Parameter[String]("par1")
       .copy(
         editor = Some(DualParameterEditor(StringParameterEditor, DualEditorMode.RAW)),
-        defaultValue = Some("'realDefault'")
+        defaultValue = Some("'realDefault'"),
+        labelOpt = Some("Parameter 1")
       ),
-    definition.Parameter[Long]("lazyPar1").copy(isLazyParameter = true, defaultValue = Some("0")),
-    definition.Parameter[Any]("a"),
-    definition.Parameter[Any]("b")
+    Parameter[Long]("lazyPar1").copy(isLazyParameter = true, defaultValue = Some("0")),
+    Parameter[Any]("a"),
+    Parameter[Any]("b")
   )
 
   private def validate(
@@ -965,12 +1315,12 @@ class NodeDataValidatorSpec extends AnyFunSuite with Matchers with Inside with T
       aModelData: LocalModelData = modelData
   ): ValidationResponse = {
     val fragmentResolver = FragmentResolver(List(fragmentDefinition))
-    new NodeDataValidator(aModelData, fragmentResolver).validate(nodeData, ctx, branchCtxs, outgoingEdges)(
+    new NodeDataValidator(aModelData).validate(nodeData, ctx, branchCtxs, outgoingEdges, fragmentResolver)(
       MetaData("id", StreamMetaData())
     )
   }
 
-  private def par(name: String, expr: String): Parameter = Parameter(name, Expression.spel(expr))
+  private def par(name: String, expr: String): NodeParameter = NodeParameter(name, Expression.spel(expr))
 
 }
 

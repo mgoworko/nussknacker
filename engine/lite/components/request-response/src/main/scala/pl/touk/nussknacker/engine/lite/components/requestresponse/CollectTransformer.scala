@@ -22,7 +22,7 @@ object CollectTransformer extends CustomStreamTransformer {
     ContextTransformation
       .definedBy { context =>
         val outputType = Typed.genericTypeClass(classOf[java.util.List[_]], inputExpression.returnType :: Nil)
-        context.withVariable(OutputVar.variable(outputVariable), outputType)
+        context.clearVariables.withVariable(OutputVar.variable(outputVariable), outputType)
       }
       .implementedBy(
         new CollectTransformer(outputVariable, inputExpression)
@@ -44,15 +44,14 @@ class CollectTransformer(outputVariable: String, inputExpression: LazyParameter[
       continuation: DataBatch => F[ResultType[Result]],
       context: CustomComponentContext[F]
   ): DataBatch => F[ResultType[Result]] = {
-
-    val outputInterpreter = context.interpreter.syncInterpretationFunction(inputExpression)
-
     // TODO: this lazy val is tricky - we should instead assign ContextIdGenerator in open, but we don't have nodeId in open
     lazy val contextIdGenerator = runtimeContext.contextIdGenerator(context.nodeId)
     (inputCtx: DataBatch) =>
-      val outputList = inputCtx.map(outputInterpreter(_)).asJava
+      val outputList = inputCtx.map(inputExpression.evaluate).asJava
       continuation(
-        DataBatch(Context(contextIdGenerator.nextContextId()).withVariable(outputVariable, outputList) :: Nil)
+        DataBatch(
+          Context(contextIdGenerator.nextContextId()).withVariable(outputVariable, outputList) :: Nil
+        )
       )
   }
 

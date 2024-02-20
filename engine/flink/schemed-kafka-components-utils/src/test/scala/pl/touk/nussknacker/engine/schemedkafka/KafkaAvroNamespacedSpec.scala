@@ -4,10 +4,10 @@ import com.typesafe.config.Config
 import com.typesafe.config.ConfigValueFactory.fromAnyRef
 import org.apache.avro.Schema
 import org.scalatest.OptionValues
-import pl.touk.nussknacker.engine.api.namespaces.{KafkaUsageKey, NamingContext, ObjectNaming, ObjectNamingParameters}
 import pl.touk.nussknacker.engine.api.process.ProcessObjectDependencies
-import pl.touk.nussknacker.engine.process.compiler.FlinkProcessCompiler
-import pl.touk.nussknacker.engine.process.registrar.FlinkProcessRegistrar
+import pl.touk.nussknacker.engine.kafka.source.InputMeta
+import pl.touk.nussknacker.engine.process.helpers.TestResultsHolder
+import pl.touk.nussknacker.engine.schemedkafka.KafkaAvroNamespacedSpec.sinkForInputMetaResultsHolder
 import pl.touk.nussknacker.engine.schemedkafka.helpers.KafkaAvroSpecMixin
 import pl.touk.nussknacker.engine.schemedkafka.schema.PaymentV1
 import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.confluent.client.{
@@ -18,11 +18,9 @@ import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.universal.MockSche
 import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.{ExistingSchemaVersion, SchemaRegistryClientFactory}
 import pl.touk.nussknacker.engine.testing.LocalModelData
 
-class NamespacedKafkaSourceSinkTest extends KafkaAvroSpecMixin with OptionValues {
+class KafkaAvroNamespacedSpec extends KafkaAvroSpecMixin with OptionValues {
 
   import KafkaAvroNamespacedMockSchemaRegistry._
-
-  protected val objectNaming: ObjectNaming = new TestObjectNaming(namespace)
 
   override protected def resolveConfig(config: Config): Config = {
     super
@@ -30,23 +28,23 @@ class NamespacedKafkaSourceSinkTest extends KafkaAvroSpecMixin with OptionValues
       .withValue("namespace", fromAnyRef(namespace))
   }
 
-  override protected lazy val testProcessObjectDependencies: ProcessObjectDependencies =
-    ProcessObjectDependencies(config, objectNaming)
+  override protected lazy val testModelDependencies: ProcessObjectDependencies =
+    ProcessObjectDependencies.withConfig(config)
 
   override protected def schemaRegistryClient: MockSchemaRegistryClient = schemaRegistryMockClient
 
   override protected def schemaRegistryClientFactory: SchemaRegistryClientFactory =
     MockSchemaRegistryClientFactory.confluentBased(schemaRegistryMockClient)
 
-  private lazy val creator: KafkaAvroTestProcessConfigCreator = new KafkaAvroTestProcessConfigCreator {
-    override protected def schemaRegistryClientFactory: SchemaRegistryClientFactory =
-      MockSchemaRegistryClientFactory.confluentBased(schemaRegistryMockClient)
-  }
+  private lazy val creator: KafkaAvroTestProcessConfigCreator =
+    new KafkaAvroTestProcessConfigCreator(sinkForInputMetaResultsHolder) {
+      override protected def schemaRegistryClientFactory: SchemaRegistryClientFactory =
+        MockSchemaRegistryClientFactory.confluentBased(schemaRegistryMockClient)
+    }
 
   override protected def beforeAll(): Unit = {
     super.beforeAll()
-    val modelData = LocalModelData(config, creator, objectNaming = objectNaming)
-    registrar = FlinkProcessRegistrar(new FlinkProcessCompiler(modelData), executionConfigPreparerChain(modelData))
+    modelData = LocalModelData(config, List.empty, configCreator = creator)
   }
 
   test("should read event in the same version as source requires and save it in the same version") {
@@ -58,32 +56,14 @@ class NamespacedKafkaSourceSinkTest extends KafkaAvroSpecMixin with OptionValues
     val sinkParam          = UniversalSinkParam(processTopicConfig, ExistingSchemaVersion(1), "#input")
     val process            = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, PaymentV1.record, PaymentV1.record)
+    runAndVerifyResult(process, topicConfig, List(PaymentV1.record), PaymentV1.record)
   }
 
 }
 
-class TestObjectNaming(namespace: String) extends ObjectNaming {
+object KafkaAvroNamespacedSpec {
 
-  private final val NamespacePattern = s"${namespace}_(.*)".r
-
-  override def prepareName(originalName: String, config: Config, namingContext: NamingContext): String =
-    namingContext.usageKey match {
-      case KafkaUsageKey => s"${namespace}_$originalName"
-      case _             => originalName
-    }
-
-  override def decodeName(preparedName: String, config: Config, namingContext: NamingContext): Option[String] =
-    (namingContext.usageKey, preparedName) match {
-      case (KafkaUsageKey, NamespacePattern(value)) => Some(value)
-      case _                                        => Option.empty
-    }
-
-  override def objectNamingParameters(
-      originalName: String,
-      config: Config,
-      namingContext: NamingContext
-  ): Option[ObjectNamingParameters] = None
+  private val sinkForInputMetaResultsHolder = new TestResultsHolder[InputMeta[_]]
 
 }
 

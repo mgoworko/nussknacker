@@ -3,7 +3,8 @@ import { Edge, EdgeKind, EdgeType } from "../../../../types";
 import BaseModalContent from "../BaseModalContent";
 import EditableEditor from "../editors/EditableEditor";
 import { useDiffMark } from "../PathsToMark";
-import { NodeLabelStyled } from "../node";
+import { getValidationErrorsForField } from "../editors/Validators";
+import { FormLabel } from "@mui/material";
 
 interface Props {
     edge: Edge;
@@ -20,7 +21,7 @@ export default function EdgeDetailsContent(props: Props): JSX.Element | null {
     const { edge, edgeErrors, readOnly, changeEdgeTypeCondition, showValidation, showSwitch, changeEdgeTypeValue, variableTypes } = props;
 
     const [isMarked] = useDiffMark();
-    const renderFieldLabel = useCallback((label) => <NodeLabelStyled>{label}</NodeLabelStyled>, []);
+    const renderFieldLabel = useCallback((label) => <FormLabel>{label}</FormLabel>, []);
 
     switch (edge.edgeType?.type) {
         case EdgeKind.switchDefault: {
@@ -57,6 +58,7 @@ export default function EdgeDetailsContent(props: Props): JSX.Element | null {
                         showValidation={showValidation}
                         showSwitch={showSwitch}
                         onValueChange={changeEdgeTypeCondition}
+                        fieldErrors={getValidationErrorsForField(edgeErrors, "edgeType.condition.expression")}
                     />
                 </BaseModalContent>
             );

@@ -1,12 +1,13 @@
 import React from "react";
-import { SettingLabelStyled, SettingRow } from "./StyledSettingsComponnets";
+import { SettingLabelStyled } from "./StyledSettingsComponnets";
 import { useTranslation } from "react-i18next";
 import { FixedValuesType, onChangeType, FixedValuesOption, FixedListParameterVariant } from "../../../item";
 import { ListItems } from "./ListItems";
 import { Option, TypeSelect } from "../../../TypeSelect";
-import { FixedValuesPresets, ReturnedType, VariableTypes } from "../../../../../../../types";
+import { FixedValuesPresets, NodeValidationError, ReturnedType, VariableTypes } from "../../../../../../../types";
 import { UserDefinedListInput } from "./UserDefinedListInput";
-import { Error } from "../../../../editors/Validators";
+import { FieldsControl } from "../../../../node-row-fields-provider/FieldsControl";
+import { Box, FormControl } from "@mui/material";
 
 interface FixedValuesSetting extends Pick<FixedListParameterVariant, "presetSelection"> {
     onChange: (path: string, value: onChangeType) => void;
@@ -17,7 +18,7 @@ interface FixedValuesSetting extends Pick<FixedListParameterVariant, "presetSele
     fixedValuesListPresetId: string;
     readOnly: boolean;
     variableTypes: VariableTypes;
-    fieldsErrors: Error[];
+    errors: NodeValidationError[];
     typ: ReturnedType;
     name: string;
     initialValue: FixedValuesOption;
@@ -32,7 +33,7 @@ export function FixedValuesSetting({
     fixedValuesList,
     readOnly,
     variableTypes,
-    fieldsErrors,
+    errors,
     typ,
     name,
     initialValue,
@@ -45,28 +46,33 @@ export function FixedValuesSetting({
         (selectedPresetValueExpression) => ({ label: selectedPresetValueExpression.label, value: selectedPresetValueExpression.label }),
     );
 
+    console.log(presetListOptions);
+    console.log(errors);
     return (
         <>
             {fixedValuesType === FixedValuesType.ValueInputWithFixedValuesPreset && (
-                <SettingRow>
+                <FormControl>
                     <SettingLabelStyled required>{t("fragment.presetSelection", "Preset selection:")}</SettingLabelStyled>
-                    <TypeSelect
-                        readOnly={readOnly}
-                        onChange={(value) => {
-                            onChange(`${path}.valueEditor.fixedValuesPresetId`, value);
-                            onChange(`${path}.initialValue`, null);
-                        }}
-                        value={presetListOptions.find((presetListOption) => presetListOption.value === fixedValuesListPresetId)}
-                        options={presetListOptions}
-                    />
-                    {selectedPresetValueExpressions?.length > 0 && (
-                        <ListItems
-                            items={selectedPresetValueExpressions}
-                            errors={fieldsErrors}
-                            fieldName={`$param.${name}.$fixedValuesPresets`}
+                    <Box width={"100%"} flex={1}>
+                        <TypeSelect
+                            readOnly={readOnly}
+                            onChange={(value) => {
+                                onChange(`${path}.valueEditor.fixedValuesPresetId`, value);
+                                onChange(`${path}.initialValue`, null);
+                            }}
+                            value={presetListOptions.find((presetListOption) => presetListOption.value === fixedValuesListPresetId)}
+                            options={presetListOptions}
+                            fieldErrors={[]}
                         />
-                    )}
-                </SettingRow>
+                        {selectedPresetValueExpressions?.length > 0 && (
+                            <ListItems
+                                items={selectedPresetValueExpressions}
+                                errors={errors}
+                                fieldName={`$param.${name}.$fixedValuesPresets`}
+                            />
+                        )}
+                    </Box>
+                </FormControl>
             )}
             {fixedValuesType === FixedValuesType.ValueInputWithFixedValuesProvided && (
                 <UserDefinedListInput
@@ -75,7 +81,7 @@ export function FixedValuesSetting({
                     readOnly={readOnly}
                     onChange={onChange}
                     path={path}
-                    errors={fieldsErrors}
+                    errors={errors}
                     typ={typ}
                     name={name}
                     initialValue={initialValue}

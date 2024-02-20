@@ -1,7 +1,7 @@
 package pl.touk.nussknacker.defaultmodel
 
+import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigValueFactory.fromAnyRef
-import com.typesafe.config.{Config, ConfigFactory}
 import io.confluent.kafka.schemaregistry.ParsedSchema
 import io.confluent.kafka.serializers.{KafkaAvroDeserializer, KafkaAvroSerializer}
 import org.apache.avro.Schema
@@ -10,19 +10,21 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.{BeforeAndAfter, BeforeAndAfterAll}
 import pl.touk.nussknacker.defaultmodel.MockSchemaRegistry.{RecordSchemaV1, schemaRegistryMockClient}
+import pl.touk.nussknacker.engine.api.namespaces.NamingStrategy
 import pl.touk.nussknacker.engine.api.process.ProcessObjectDependencies
 import pl.touk.nussknacker.engine.api.validation.ValidationMode
 import pl.touk.nussknacker.engine.api.{JobData, ProcessListener, ProcessVersion}
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.deployment.DeploymentData
 import pl.touk.nussknacker.engine.flink.test.FlinkSpec
+import pl.touk.nussknacker.engine.flink.util.transformer.FlinkBaseComponentProvider
 import pl.touk.nussknacker.engine.kafka.{KafkaConfig, KafkaSpec}
-import pl.touk.nussknacker.engine.process.ExecutionConfigPreparer
+import pl.touk.nussknacker.engine.process.{ExecutionConfigPreparer, FlinkJobConfig}
 import pl.touk.nussknacker.engine.process.ExecutionConfigPreparer.{
   ProcessSettingsPreparer,
   UnoptimizedSerializationPreparer
 }
-import pl.touk.nussknacker.engine.process.compiler.FlinkProcessCompiler
+import pl.touk.nussknacker.engine.process.compiler.FlinkProcessCompilerDataFactory
 import pl.touk.nussknacker.engine.process.registrar.FlinkProcessRegistrar
 import pl.touk.nussknacker.engine.schemedkafka.AvroUtils
 import pl.touk.nussknacker.engine.schemedkafka.encode.BestEffortAvroEncoder
@@ -38,6 +40,8 @@ import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.{
 import pl.touk.nussknacker.engine.testing.LocalModelData
 import pl.touk.nussknacker.engine.util.LoggingListener
 import pl.touk.nussknacker.test.{KafkaConfigProperties, WithConfig}
+
+import java.nio.charset.StandardCharsets
 
 abstract class FlinkWithKafkaSuite
     extends AnyFunSuite
@@ -56,8 +60,17 @@ abstract class FlinkWithKafkaSuite
 
   override protected def beforeAll(): Unit = {
     super.beforeAll()
-    val modelData = LocalModelData(config, creator)
-    registrar = FlinkProcessRegistrar(new FlinkProcessCompiler(modelData), executionConfigPreparerChain(modelData))
+    val components =
+      new MockFlinkKafkaComponentProvider()
+        .create(kafkaComponentsConfig, ProcessObjectDependencies.withConfig(config)) :::
+        FlinkBaseComponentProvider.Components
+    val modelData =
+      LocalModelData(config, components, configCreator = creator, namingStrategy = Some(NamingStrategy(Some("ns"))))
+    registrar = FlinkProcessRegistrar(
+      new FlinkProcessCompilerDataFactory(modelData),
+      FlinkJobConfig.parse(modelData.modelConfig),
+      executionConfigPreparerChain(modelData)
+    )
   }
 
   private def executionConfigPreparerChain(modelData: LocalModelData) = {
@@ -80,33 +93,28 @@ abstract class FlinkWithKafkaSuite
 
   protected def avroAsJsonSerialization = false
 
-  override lazy val config: Config = ConfigFactory
-    .load()
+  private lazy val kafkaComponentsConfig = ConfigFactory
+    .empty()
     .withValue(
-      KafkaConfigProperties.bootstrapServersProperty("components.mockKafkaFlink.config"),
+      KafkaConfigProperties.bootstrapServersProperty("config"),
       fromAnyRef(kafkaServer.kafkaAddress)
     )
     .withValue(
-      KafkaConfigProperties.property("components.mockKafkaFlink.config", "schema.registry.url"),
+      KafkaConfigProperties.property("config", "schema.registry.url"),
       fromAnyRef("not_used")
     )
     .withValue(
-      KafkaConfigProperties.property("components.mockKafkaFlink.config", "auto.offset.reset"),
+      KafkaConfigProperties.property("config", "auto.offset.reset"),
       fromAnyRef("earliest")
     )
-    .withValue("components.mockKafkaFlink.config.lowLevelComponentsEnabled", fromAnyRef(false))
-    .withValue("components.kafka.disabled", fromAnyRef(true))
-    .withValue("components.mockKafkaLite.disabled", fromAnyRef(true))
-    .withValue("components.mockKafkaFlink.disabled", fromAnyRef(false))
-    // For tests we want to read from the beginning...
-    .withValue("components.mockKafkaFlink.config.avroAsJsonSerialization", fromAnyRef(avroAsJsonSerialization))
+    .withValue("config.avroAsJsonSerialization", fromAnyRef(avroAsJsonSerialization))
     // we turn off auto registration to do it on our own passing mocked schema registry client
     .withValue(
-      s"components.mockKafkaFlink.config.kafkaEspProperties.${AvroSerializersRegistrar.autoRegisterRecordSchemaIdSerializationProperty}",
+      s"config.kafkaEspProperties.${AvroSerializersRegistrar.autoRegisterRecordSchemaIdSerializationProperty}",
       fromAnyRef(false)
     )
 
-  lazy val kafkaConfig: KafkaConfig                = KafkaConfig.parseConfig(config, "components.mockKafkaFlink.config")
+  lazy val kafkaConfig: KafkaConfig                = KafkaConfig.parseConfig(config, "config")
   protected val avroEncoder: BestEffortAvroEncoder = BestEffortAvroEncoder(ValidationMode.strict)
 
   protected val givenNotMatchingAvroObj = avroEncoder.encodeRecordOrError(
@@ -122,11 +130,16 @@ abstract class FlinkWithKafkaSuite
   protected def run(process: CanonicalProcess)(action: => Unit): Unit = {
     val env = flinkMiniCluster.createExecutionEnvironment()
     registrar.register(env, process, ProcessVersion.empty, DeploymentData.empty)
-    env.withJobRunning(process.id)(action)
+    env.withJobRunning(process.name.value)(action)
   }
 
   protected def sendAvro(obj: Any, topic: String, timestamp: java.lang.Long = null) = {
     val serializedObj = valueSerializer.serialize(topic, obj)
+    kafkaClient.sendRawMessage(topic, Array.empty, serializedObj, timestamp = timestamp)
+  }
+
+  protected def sendAsJson(jsonString: String, topic: String, timestamp: java.lang.Long = null) = {
+    val serializedObj = jsonString.getBytes(StandardCharsets.UTF_8)
     kafkaClient.sendRawMessage(topic, Array.empty, serializedObj, timestamp = timestamp)
   }
 
@@ -161,6 +174,8 @@ abstract class FlinkWithKafkaSuite
 
   protected def createAndRegisterTopicConfig(name: String, schema: ParsedSchema): TopicConfig =
     createAndRegisterTopicConfig(name, List(schema))
+
+  protected def parseJson(str: String) = io.circe.parser.parse(str).toOption.get
 }
 
 case class TopicConfig(input: String, output: String, schemas: List[ParsedSchema], isKey: Boolean)
@@ -225,7 +240,7 @@ object MockSchemaRegistry extends Serializable {
 
 class TestDefaultConfigCreator extends DefaultConfigCreator {
 
-  override def listeners(processObjectDependencies: ProcessObjectDependencies): Seq[ProcessListener] =
+  override def listeners(modelDependencies: ProcessObjectDependencies): Seq[ProcessListener] =
     Seq(LoggingListener)
 
 }

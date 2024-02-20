@@ -4,11 +4,9 @@ import React, { SetStateAction, useCallback, useEffect, useMemo, useState } from
 import { useTranslation } from "react-i18next";
 import { useDispatch, useSelector } from "react-redux";
 import { editNode } from "../../../../actions/nk";
-import { setAndPreserveLocationParams, visualizationUrl } from "../../../../common/VisualizationUrl";
-import { getProcessToDisplay } from "../../../../reducers/selectors/graph";
-import { Edge, NodeType, Process } from "../../../../types";
+import { visualizationUrl } from "../../../../common/VisualizationUrl";
+import { Edge, NodeType } from "../../../../types";
 import { WindowContent, WindowKind } from "../../../../windowManager";
-import { parseWindowsQueryParams } from "../../../../windowManager/useWindows";
 import ErrorBoundary from "../../../common/ErrorBoundary";
 import NodeUtils from "../../NodeUtils";
 import NodeDetailsModalHeader from "../nodeDetails/NodeDetailsModalHeader";
@@ -18,23 +16,27 @@ import urljoin from "url-join";
 import { BASE_PATH } from "../../../../config";
 import { RootState } from "../../../../reducers";
 import { applyIdFromFakeName } from "../IdField";
-import { mapValues } from "lodash";
-import { ensureArray } from "../../../../common/arrayUtils";
-import { useNavigate } from "react-router-dom";
 import { useTheme } from "@mui/material";
 import { alpha, tint } from "../../../../containers/theme/helpers";
+import { parseWindowsQueryParams, replaceSearchQuery } from "../../../../containers/hooks/useSearchQuery";
+import { Scenario } from "../../../Process/types";
+import { getScenario } from "../../../../reducers/selectors/graph";
 
-interface NodeDetailsProps extends WindowContentProps<WindowKind, { node: NodeType; process: Process }> {
+function mergeQuery(changes: Record<string, string[]>) {
+    return replaceSearchQuery((current) => ({ ...current, ...changes }));
+}
+
+interface NodeDetailsProps extends WindowContentProps<WindowKind, { node: NodeType; scenario: Scenario }> {
     readOnly?: boolean;
 }
 
 export function NodeDetails(props: NodeDetailsProps): JSX.Element {
-    const processFromGlobalStore = useSelector(getProcessToDisplay);
+    const scenarioFromGlobalStore = useSelector(getScenario);
     const readOnly = useSelector((s: RootState) => getReadOnly(s, props.readOnly));
 
-    const { node, process = processFromGlobalStore } = props.data.meta;
+    const { node, scenario = scenarioFromGlobalStore } = props.data.meta;
     const [editedNode, setEditedNode] = useState<NodeType>(node);
-    const [outputEdges, setOutputEdges] = useState(() => process.edges.filter(({ from }) => from === node.id));
+    const [outputEdges, setOutputEdges] = useState(() => scenario.scenarioGraph.edges.filter(({ from }) => from === node.id));
 
     const onChange = useCallback((node: SetStateAction<NodeType>, edges: SetStateAction<Edge[]>) => {
         setEditedNode(node);
@@ -43,25 +45,13 @@ export function NodeDetails(props: NodeDetailsProps): JSX.Element {
 
     const dispatch = useDispatch();
 
-    const navigate = useNavigate();
-    const replaceWindowsQueryParams = useCallback(
-        <P extends Record<string, string | string[]>>(add: P, remove?: P): void => {
-            const params = parseWindowsQueryParams(add, remove);
-            const search = setAndPreserveLocationParams(mapValues(params, (v) => ensureArray(v).map(encodeURIComponent)));
-            navigate({ search }, { replace: true });
-        },
-        [navigate],
-    );
-
-    useEffect(() => {
-        replaceWindowsQueryParams({ nodeId: node.id });
-        return () => replaceWindowsQueryParams({}, { nodeId: node.id });
-    }, [node.id]);
-
     const performNodeEdit = useCallback(async () => {
-        await dispatch(editNode(process, node, applyIdFromFakeName(editedNode), outputEdges));
+        await dispatch(await editNode(scenario, node, applyIdFromFakeName(editedNode), outputEdges));
+
+        //TODO: without removing nodeId query param, the dialog after close, is opening again. It looks like props.close doesn't unmount component.
+        mergeQuery(parseWindowsQueryParams({}, { nodeId: node.id }));
         props.close();
-    }, [process, node, editedNode, outputEdges, dispatch, props]);
+    }, [scenario, node, editedNode, outputEdges, dispatch, props]);
 
     const { t } = useTranslation();
     const theme = useTheme();
@@ -120,8 +110,15 @@ export function NodeDetails(props: NodeDetailsProps): JSX.Element {
         return { HeaderTitle };
     }, [node]);
 
+    useEffect(() => {
+        mergeQuery(parseWindowsQueryParams({ nodeId: node.id }));
+        return () => {
+            mergeQuery(parseWindowsQueryParams({}, { nodeId: node.id }));
+        };
+    }, [node.id]);
+
     //no process? no nodes? no window contents! no errors for whole tree!
-    if (!processFromGlobalStore?.nodes) {
+    if (!scenarioFromGlobalStore?.scenarioGraph.nodes) {
         return null;
     }
 

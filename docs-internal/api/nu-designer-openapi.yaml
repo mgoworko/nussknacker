@@ -3,6 +3,153 @@ info:
   title: Nussknacker Designer API
   version: ''
 paths:
+  /api/components/{id}/usages:
+    get:
+      tags:
+      - Components
+      summary: Show component usage
+      operationId: getApiComponentsIdUsages
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ComponentUsagesInScenario'
+              examples:
+                Example0:
+                  summary: List component usages
+                  value:
+                  - name: scenario1
+                    nodesUsagesData:
+                    - nodeId: csv-source
+                      type: ScenarioUsageData
+                    isFragment: false
+                    processCategory: Category1
+                    modificationDate: '2023-11-29T08:54:22.520866Z'
+                    modifiedAt: '2023-11-29T08:54:22.520866Z'
+                    modifiedBy: admin
+                    createdAt: '2023-11-14T11:09:28.078800Z'
+                    createdBy: admin
+                    lastAction:
+                      id: 45c0f3f5-3ef7-4dc2-92d4-8bb826ec0ca9
+                      processId: 1
+                      processVersionId: 1
+                      user: admin
+                      createdAt: '2023-11-29T08:54:22.520866Z'
+                      performedAt: '2023-11-29T08:54:22.520866Z'
+                      actionType: DEPLOY
+                      state: FINISHED
+                      buildInfo: {}
+                Example1:
+                  summary: List component usages with no last Action
+                  value:
+                  - name: scenario1
+                    nodesUsagesData:
+                    - nodeId: csv-source
+                      type: ScenarioUsageData
+                    isFragment: false
+                    processCategory: Category1
+                    modificationDate: '2023-11-29T08:54:22.520866Z'
+                    modifiedAt: '2023-11-29T08:54:22.520866Z'
+                    modifiedBy: admin
+                    createdAt: '2023-11-14T11:09:28.078800Z'
+                    createdBy: admin
+        '401':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authentication failed
+                  value: The supplied authentication is invalid
+        '403':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authorization failed
+                  value: The supplied authentication is not authorized to access this
+                    resource
+        '404':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: Component {id} not exist.
+      security:
+      - {}
+      - httpAuth: []
+  /api/components:
+    get:
+      tags:
+      - Components
+      summary: Listing components
+      operationId: getApiComponents
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ComponentListElement'
+              examples:
+                Example:
+                  summary: List of available components
+                  value:
+                  - id: request-response-embedded-customnode-collect
+                    name: collect
+                    icon: /assets/components/CustomNode.svg
+                    componentType: custom
+                    componentGroupName: custom
+                    categories:
+                    - RequestResponse
+                    links:
+                    - id: documentation
+                      title: Documentation
+                      icon: /assets/icons/documentation.svg
+                      url: https://nussknacker.io/documentation/docs/scenarios_authoring/RRDataSourcesAndSinks/#collect
+                    usageCount: 2
+        '401':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authentication failed
+                  value: The supplied authentication is invalid
+        '403':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authorization failed
+                  value: The supplied authentication is not authorized to access this
+                    resource
+      security:
+      - {}
+      - httpAuth: []
   /api/app/healthCheck:
     get:
       tags:
@@ -102,6 +249,7 @@ paths:
                     - process1
                     - process2
       security:
+      - {}
       - httpAuth: []
   /api/app/healthCheck/process/validation:
     get:
@@ -158,6 +306,7 @@ paths:
                     - process2
                     - process3
       security:
+      - {}
       - httpAuth: []
   /api/app/processingtype/reload:
     post:
@@ -190,6 +339,7 @@ paths:
                   value: The supplied authentication is not authorized to access this
                     resource
       security:
+      - {}
       - httpAuth: []
   /api/app/config:
     get:
@@ -239,6 +389,7 @@ paths:
                   value: The supplied authentication is not authorized to access this
                     resource
       security:
+      - {}
       - httpAuth: []
   /api/app/config/categoriesWithProcessingType:
     get:
@@ -281,9 +432,405 @@ paths:
                   value: The supplied authentication is not authorized to access this
                     resource
       security:
+      - {}
+      - httpAuth: []
+  /api/notifications:
+    get:
+      tags:
+      - Notifications
+      summary: Endpoint to display notifications
+      operationId: getApiNotifications
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notification'
+              examples:
+                Example:
+                  summary: Display simple deployment notification
+                  value:
+                  - id: 0351c45a-2c4c-4ffd-8848-ae6c2f281ef1
+                    scenarioName: scenario1
+                    message: Deployment finished
+                    toRefresh:
+                    - versions
+                    - activity
+                    - state
+        '401':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authentication failed
+                  value: The supplied authentication is invalid
+        '403':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authorization failed
+                  value: The supplied authentication is not authorized to access this
+                    resource
+      security:
+      - {}
+      - httpAuth: []
+  /api/processes/{scenarioName}/{versionId}/activity/comments:
+    post:
+      tags:
+      - Scenario
+      summary: Add scenario comment service
+      operationId: postApiProcessesScenarionameVersionidActivityComments
+      parameters:
+      - name: scenarioName
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: versionId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        content:
+          text/plain:
+            schema:
+              type: string
+        required: true
+      responses:
+        '200':
+          description: ''
+        '400':
+          description: 'Invalid value for: path parameter versionId, Invalid value
+            for: body'
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authentication failed
+                  value: The supplied authentication is invalid
+        '403':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authorization failed
+                  value: The supplied authentication is not authorized to access this
+                    resource
+        '404':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: No scenario {scenarioName} found
+                  value: No scenario 'example scenario' found
+      security:
+      - {}
+      - httpAuth: []
+  /api/processes/{scenarioName}/activity/comments/{commentId}:
+    delete:
+      tags:
+      - Scenario
+      summary: Delete process comment service
+      operationId: deleteApiProcessesScenarionameActivityCommentsCommentid
+      parameters:
+      - name: scenarioName
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: commentId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        '200':
+          description: ''
+        '400':
+          description: 'Invalid value for: path parameter commentId'
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authentication failed
+                  value: The supplied authentication is invalid
+        '403':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authorization failed
+                  value: The supplied authentication is not authorized to access this
+                    resource
+        '404':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: No scenario {scenarioName} found
+                  value: No scenario 'example scenario' found
+        '500':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: 'Unable to delete comment with id: {commentId}'
+                  value: 'Unable to delete comment with id: 1'
+      security:
+      - {}
+      - httpAuth: []
+  /api/processes/{scenarioName}/activity:
+    get:
+      tags:
+      - Scenario
+      summary: Scenario activity service
+      operationId: getApiProcessesScenarionameActivity
+      parameters:
+      - name: scenarioName
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioActivity'
+              examples:
+                Example:
+                  summary: Display scenario activity
+                  value:
+                    comments:
+                    - id: 1
+                      processVersionId: 1
+                      content: some comment
+                      user: test
+                      createDate: '2024-01-17T14:21:17Z'
+                    attachments:
+                    - id: 1
+                      processVersionId: 1
+                      fileName: some_file.txt
+                      user: test
+                      createDate: '2024-01-17T14:21:17Z'
+        '401':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authentication failed
+                  value: The supplied authentication is invalid
+        '403':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authorization failed
+                  value: The supplied authentication is not authorized to access this
+                    resource
+        '404':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: No scenario {scenarioName} found
+                  value: No scenario 'example scenario' found
+      security:
+      - {}
+      - httpAuth: []
+  /api/scenarioParametersCombinations:
+    get:
+      tags:
+      - App
+      summary: Service providing available combinations of scenario's parameters
+      operationId: getApiScenarioparameterscombinations
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioParametersCombinationWithEngineErrors'
+              examples:
+                Example:
+                  summary: List of available parameters combinations
+                  value:
+                    combinations:
+                    - processingMode: Unbounded-Stream
+                      category: Marketing
+                      engineSetupName: Flink
+                    - processingMode: Request-Response
+                      category: Fraud
+                      engineSetupName: Lite K8s
+                    - processingMode: Unbounded-Stream
+                      category: Fraud
+                      engineSetupName: Flink Fraud Detection
+                    engineSetupErrors:
+                      Flink:
+                      - Invalid Flink configuration
+        '401':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authentication failed
+                  value: The supplied authentication is invalid
+        '403':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authorization failed
+                  value: The supplied authentication is not authorized to access this
+                    resource
+      security:
+      - {}
+      - httpAuth: []
+  /api/user:
+    get:
+      tags:
+      - User
+      summary: Logged user info service
+      operationId: getApiUser
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DisplayableUser'
+              examples:
+                Example0:
+                  summary: Common user info
+                  value:
+                    id: reader
+                    username: reader
+                    isAdmin: false
+                    categories:
+                    - Category1
+                    categoryPermissions:
+                      Category1:
+                      - Read
+                    globalPermissions: []
+                Example1:
+                  summary: Admin user info
+                  value:
+                    id: admin
+                    username: admin
+                    isAdmin: true
+                    categories:
+                    - Category1
+                    - Category2
+                    categoryPermissions: {}
+                    globalPermissions: []
+        '401':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authentication failed
+                  value: The supplied authentication is invalid
+        '403':
+          description: ''
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                Example:
+                  summary: Authorization failed
+                  value: The supplied authentication is not authorized to access this
+                    resource
+      security:
+      - {}
       - httpAuth: []
 components:
   schemas:
+    Attachment:
+      required:
+      - id
+      - processVersionId
+      - fileName
+      - user
+      - createDate
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        processVersionId:
+          type: integer
+          format: int64
+        fileName:
+          type: string
+        user:
+          type: string
+        createDate:
+          type: string
+          format: date-time
     BuildInfoDto:
       required:
       - name
@@ -305,6 +852,168 @@ components:
           $ref: '#/components/schemas/Map_Map_String_String'
         globalBuildInfo:
           $ref: '#/components/schemas/Map_String'
+    Comment:
+      required:
+      - id
+      - processVersionId
+      - content
+      - user
+      - createDate
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        processVersionId:
+          type: integer
+          format: int64
+        content:
+          type: string
+        user:
+          type: string
+        createDate:
+          type: string
+          format: date-time
+    ComponentGroupName:
+      required:
+      - value
+      type: object
+      properties:
+        value:
+          type: string
+    ComponentLink:
+      required:
+      - id
+      - title
+      - icon
+      - url
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        icon:
+          type: string
+        url:
+          type: string
+    ComponentListElement:
+      required:
+      - id
+      - name
+      - icon
+      - componentType
+      - componentGroupName
+      - usageCount
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        icon:
+          type: string
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+        componentGroupName:
+          $ref: '#/components/schemas/ComponentGroupName'
+        categories:
+          type: array
+          items:
+            type: string
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComponentLink'
+        usageCount:
+          type: integer
+          format: int64
+    ComponentType:
+      type: string
+      enum:
+      - source
+      - sink
+      - service
+      - custom
+      - fragment
+      - builtin
+    ComponentUsagesInScenario:
+      required:
+      - name
+      - isFragment
+      - processCategory
+      - modificationDate
+      - modifiedAt
+      - modifiedBy
+      - createdAt
+      - createdBy
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/ProcessName'
+        nodesUsagesData:
+          type: array
+          items:
+            $ref: '#/components/schemas/NodeUsageData'
+        isFragment:
+          type: boolean
+        processCategory:
+          type: string
+        modificationDate:
+          type: string
+          format: date-time
+        modifiedAt:
+          type: string
+          format: date-time
+        modifiedBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+        lastAction:
+          $ref: '#/components/schemas/ProcessAction'
+    DataToRefresh:
+      type: string
+      enum:
+      - versions
+      - activity
+      - state
+    DisplayableUser:
+      required:
+      - id
+      - username
+      - isAdmin
+      - categoryPermissions
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        isAdmin:
+          type: boolean
+        categories:
+          type: array
+          items:
+            type: string
+        categoryPermissions:
+          $ref: '#/components/schemas/Map_List_String'
+        globalPermissions:
+          type: array
+          items:
+            type: string
+    FragmentUsageData:
+      required:
+      - fragmentNodeId
+      - nodeId
+      type: object
+      properties:
+        fragmentNodeId:
+          type: string
+        nodeId:
+          type: string
     HealthCheckProcessErrorResponseDto:
       required:
       - status
@@ -339,6 +1048,18 @@ components:
           - 'null'
           items:
             type: string
+    Map_EngineSetupName_List_String:
+      type: object
+      additionalProperties:
+        type: array
+        items:
+          type: string
+    Map_List_String:
+      type: object
+      additionalProperties:
+        type: array
+        items:
+          type: string
     Map_Map_String_String:
       type: object
       additionalProperties:
@@ -347,6 +1068,163 @@ components:
       type: object
       additionalProperties:
         type: string
+    NodeUsageData:
+      oneOf:
+      - $ref: '#/components/schemas/FragmentUsageData'
+      - $ref: '#/components/schemas/ScenarioUsageData'
+    Notification:
+      required:
+      - id
+      - message
+      type: object
+      properties:
+        id:
+          type: string
+        scenarioName:
+          type:
+          - string
+          - 'null'
+        message:
+          type: string
+        type:
+          $ref: '#/components/schemas/NotificationType'
+        toRefresh:
+          type: array
+          items:
+            $ref: '#/components/schemas/DataToRefresh'
+    NotificationType:
+      type: string
+      enum:
+      - info
+      - success
+      - error
+    ProcessAction:
+      required:
+      - id
+      - processId
+      - processVersionId
+      - user
+      - createdAt
+      - performedAt
+      - actionType
+      - state
+      - buildInfo
+      type: object
+      properties:
+        id:
+          $ref: '#/components/schemas/ProcessActionId'
+        processId:
+          $ref: '#/components/schemas/ProcessId'
+        processVersionId:
+          $ref: '#/components/schemas/VersionId'
+        user:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        performedAt:
+          type: string
+          format: date-time
+        actionType:
+          $ref: '#/components/schemas/ProcessActionType'
+        state:
+          $ref: '#/components/schemas/ProcessActionState'
+        failureMessage:
+          type:
+          - string
+          - 'null'
+        commentId:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        comment:
+          type:
+          - string
+          - 'null'
+        buildInfo:
+          $ref: '#/components/schemas/Map_String'
+    ProcessActionId:
+      required:
+      - value
+      type: object
+      properties:
+        value:
+          type: string
+          format: uuid
+    ProcessActionState:
+      type: string
+      enum:
+      - IN_PROGRESS
+      - FINISHED
+      - FAILED
+      - EXECUTION_FINISHED
+    ProcessActionType:
+      type: string
+      enum:
+      - DEPLOY
+      - CANCEL
+      - ARCHIVE
+      - UNARCHIVE
+      - PAUSE
+      - RENAME
+    ProcessId:
+      required:
+      - value
+      type: object
+      properties:
+        value:
+          type: integer
+          format: int64
+    ProcessName:
+      required:
+      - value
+      type: object
+      properties:
+        value:
+          type: string
+    ScenarioActivity:
+      type: object
+      properties:
+        comments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Comment'
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Attachment'
+    ScenarioParameters:
+      required:
+      - processingMode
+      - category
+      - engineSetupName
+      type: object
+      properties:
+        processingMode:
+          type: string
+        category:
+          type: string
+        engineSetupName:
+          type: string
+    ScenarioParametersCombinationWithEngineErrors:
+      required:
+      - engineSetupErrors
+      type: object
+      properties:
+        combinations:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScenarioParameters'
+        engineSetupErrors:
+          $ref: '#/components/schemas/Map_EngineSetupName_List_String'
+    ScenarioUsageData:
+      required:
+      - nodeId
+      type: object
+      properties:
+        nodeId:
+          type: string
     Status:
       type: string
       enum:
@@ -355,6 +1233,14 @@ components:
       type: string
       enum:
       - ERROR
+    VersionId:
+      required:
+      - value
+      type: object
+      properties:
+        value:
+          type: integer
+          format: int64
   securitySchemes:
     httpAuth:
       type: http

@@ -24,6 +24,9 @@ object Context {
 
   def apply(id: String): Context = Context(id, Map.empty, None)
 
+  def apply(id: String, variables: Map[String, Any]): Context =
+    Context(id, variables, None)
+
 }
 
 case class ContextId(value: String)
@@ -35,15 +38,21 @@ case class ContextId(value: String)
  * @param variables     variables available in evaluation
  * @param parentContext context used for scopes handling, mainly for fragment invocation purpose
  */
-case class Context(id: String, variables: Map[String, Any], parentContext: Option[Context]) {
+case class Context(
+    id: String,
+    variables: Map[String, Any],
+    parentContext: Option[Context]
+) {
 
   def appendIdSuffix(suffix: String): Context =
     copy(id = s"$id-$suffix")
 
+  // TODO: all methods should has NotNothing type check to avoid situation when scala's compiler implicitly put Nothing
+  //       into parameter
   def apply[T](name: String): T =
     getOrElse(name, throw new RuntimeException(s"Unknown variable: $name"))
 
-  def getOrElse[T](name: String, default: => T) =
+  def getOrElse[T](name: String, default: => T): T =
     get(name).getOrElse(default)
 
   def get[T](name: String): Option[T] =

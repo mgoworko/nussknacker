@@ -3,7 +3,7 @@ package pl.touk.nussknacker.engine.testmode
 import cats.data.Validated.{Invalid, Valid}
 import cats.data.ValidatedNel
 import cats.implicits._
-import pl.touk.nussknacker.engine.{ModelData, TypeDefinitionSet}
+import pl.touk.nussknacker.engine.ModelData
 import pl.touk.nussknacker.engine.api.context.PartSubGraphCompilationError
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.UnknownProperty
 import pl.touk.nussknacker.engine.api.definition.Parameter
@@ -13,27 +13,28 @@ import pl.touk.nussknacker.engine.api.test.{ScenarioTestJsonRecord, ScenarioTest
 import pl.touk.nussknacker.engine.api.{Context, MetaData, NodeId}
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.compile.ExpressionCompiler
-import pl.touk.nussknacker.engine.compiledgraph.evaluatedparam
-import pl.touk.nussknacker.engine.definition.DefinitionExtractor.ObjectWithMethodDef
-import pl.touk.nussknacker.engine.definition.ProcessDefinitionExtractor.ExpressionDefinition
+import pl.touk.nussknacker.engine.compiledgraph.CompiledParameter
+import pl.touk.nussknacker.engine.definition.clazz.ClassDefinitionSet
+import pl.touk.nussknacker.engine.definition.component.ComponentDefinitionWithImplementation
+import pl.touk.nussknacker.engine.definition.globalvariables.ExpressionConfigDefinition
 import pl.touk.nussknacker.engine.expression.ExpressionEvaluator
 import pl.touk.nussknacker.engine.graph.expression.Expression
 import pl.touk.nussknacker.engine.variables.GlobalVariablesPreparer
 
 class TestDataPreparer(
     classloader: ClassLoader,
-    expressionConfig: ExpressionDefinition[ObjectWithMethodDef],
+    expressionConfig: ExpressionConfigDefinition,
     dictRegistry: EngineDictRegistry,
-    typeDefinitionSet: TypeDefinitionSet,
+    classDefinitionSet: ClassDefinitionSet,
     metaData: MetaData
 ) {
 
   private lazy val dumbContext             = Context("dumb", Map.empty, None)
   private lazy val globalVariablesPreparer = GlobalVariablesPreparer(expressionConfig)
-  private lazy val validationContext       = globalVariablesPreparer.emptyLocalVariablesValidationContext(metaData)
+  private lazy val validationContext = globalVariablesPreparer.prepareValidationContextWithGlobalVariablesOnly(metaData)
   private lazy val evaluator: ExpressionEvaluator = ExpressionEvaluator.unOptimizedEvaluator(globalVariablesPreparer)
   private lazy val expressionCompiler: ExpressionCompiler =
-    ExpressionCompiler.withoutOptimization(classloader, dictRegistry, expressionConfig, typeDefinitionSet)
+    ExpressionCompiler.withoutOptimization(classloader, dictRegistry, expressionConfig, classDefinitionSet)
 
   def prepareRecordForTest[T](source: Source, record: ScenarioTestRecord): T = {
     implicit val implicitNodeId: NodeId = record.sourceId
@@ -68,7 +69,7 @@ class TestDataPreparer(
     expressionCompiler
       .compile(expression, Some(parameter.name), validationContext, parameter.typ)(nodeId)
       .map { typedExpression =>
-        val param = evaluatedparam.Parameter(typedExpression, parameter)
+        val param = CompiledParameter(typedExpression, parameter)
         evaluator.evaluateParameter(param, dumbContext)(nodeId, metaData).value
       }
   }
@@ -82,7 +83,7 @@ object TestDataPreparer {
       modelData.modelClassLoader.classLoader,
       modelData.modelDefinition.expressionConfig,
       modelData.engineDictRegistry,
-      modelData.modelDefinitionWithTypes.typeDefinitions,
+      modelData.modelDefinitionWithClasses.classDefinitions,
       process.metaData
     )
 

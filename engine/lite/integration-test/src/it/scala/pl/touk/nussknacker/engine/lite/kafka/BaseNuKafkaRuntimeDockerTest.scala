@@ -34,7 +34,7 @@ trait BaseNuKafkaRuntimeDockerTest
 
   protected val schemaRegistryContainer = {
     val container = GenericContainer(
-      "confluentinc/cp-schema-registry:7.3.0",
+      "confluentinc/cp-schema-registry:7.5.3",
       exposedPorts = Seq(schemaRegistryPort),
       env = Map(
         "SCHEMA_REGISTRY_HOST_NAME"                    -> schemaRegistryHostname,
@@ -52,7 +52,7 @@ trait BaseNuKafkaRuntimeDockerTest
   protected lazy val schemaRegistryClient = new CachedSchemaRegistryClient(mappedSchemaRegistryAddress, 10)
 
   protected val kafkaContainer: KafkaContainer = {
-    val container = KafkaContainer(DockerImageName.parse(s"${KafkaContainer.defaultImage}:7.4.0"))
+    val container = KafkaContainer(DockerImageName.parse(s"${KafkaContainer.defaultImage}:7.5.3"))
       .configure(_.withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "FALSE"))
     configureNetwork(container, kafkaHostname)
     container
@@ -76,11 +76,10 @@ trait BaseNuKafkaRuntimeDockerTest
       additionalEnvs: Map[String, String] = Map.empty
   ): Unit = {
     val kafkaEnvs = Map(
-      "KAFKA_ADDRESS"                                -> dockerNetworkKafkaBoostrapServer,
-      "KAFKA_AUTO_OFFSET_RESET"                      -> "earliest",
-      "CONFIG_FORCE_kafka_lowLevelComponentsEnabled" -> "false",
-      "KAFKA_ERROR_TOPIC"                            -> fixture.errorTopic,
-      "SCHEMA_REGISTRY_URL"                          -> dockerNetworkSchemaRegistryAddress
+      "KAFKA_ADDRESS"           -> dockerNetworkKafkaBoostrapServer,
+      "KAFKA_AUTO_OFFSET_RESET" -> "earliest",
+      "KAFKA_ERROR_TOPIC"       -> fixture.errorTopic,
+      "SCHEMA_REGISTRY_URL"     -> dockerNetworkSchemaRegistryAddress
     )
     runtimeContainer = NuRuntimeDockerTestUtils.startRuntimeContainer(
       scenarioFile,

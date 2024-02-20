@@ -1,10 +1,12 @@
 import React from "react";
 import { filterRules } from "../filters";
 import { ItemsList } from "./itemsList";
-import { ProcessType } from "nussknackerUi/components/Process/types";
+import { Scenario } from "nussknackerUi/components/Process/types";
 import { Box } from "@mui/material";
 
-export type RowType = ProcessType;
+export interface RowType extends Scenario {
+    hide?: boolean;
+}
 
 export interface ListPartProps<T> {
     data: T[];

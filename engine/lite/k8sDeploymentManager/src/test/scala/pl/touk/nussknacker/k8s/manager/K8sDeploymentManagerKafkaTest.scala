@@ -7,8 +7,9 @@ import org.scalatest.Inspectors.forAll
 import org.scalatest.OptionValues
 import org.scalatest.tags.Network
 import pl.touk.nussknacker.engine.api.ProcessVersion
+import pl.touk.nussknacker.engine.api.deployment.DataFreshnessPolicy
 import pl.touk.nussknacker.engine.api.deployment.simple.SimpleStateStatus
-import pl.touk.nussknacker.engine.api.process.{EmptyProcessConfigCreator, ProcessId, ProcessName, VersionId}
+import pl.touk.nussknacker.engine.api.process.{ProcessId, VersionId}
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.deployment.DeploymentData
@@ -38,8 +39,8 @@ class K8sDeploymentManagerKafkaTest
     with EitherValuesDetailedMessage
     with LazyLogging {
 
-  private lazy val kafka                                   = new KafkaK8sSupport(k8s)
-  private implicit val backend: SttpBackend[Identity, Any] = HttpURLConnectionBackend()
+  private implicit val freshnessPolicy: DataFreshnessPolicy = DataFreshnessPolicy.Fresh
+  private lazy val kafka                                    = new KafkaK8sSupport(k8s)
 
   test("deployment of kafka ping-pong") {
     val f = createKafkaFixture()
@@ -75,14 +76,14 @@ class K8sDeploymentManagerKafkaTest
           "Value"                 -> s"{ original: #input, version: $version }"
         )
 
-      val pversion = ProcessVersion(VersionId(version), ProcessName(scenario.id), ProcessId(1234), "testUser", Some(22))
+      val pversion = ProcessVersion(VersionId(version), scenario.name, ProcessId(1234), "testUser", Some(22))
       manager.deploy(pversion, DeploymentData.empty, scenario, None).futureValue
       pversion
     }
 
     def waitForRunning(version: ProcessVersion) = {
       eventually {
-        val state = manager.getFreshProcessStates(version.processName).futureValue
+        val state = manager.getProcessStates(version.processName).map(_.value).futureValue
         state.flatMap(_.version) shouldBe List(version)
         state.map(_.status) shouldBe List(SimpleStateStatus.Running)
       }
@@ -171,7 +172,7 @@ class K8sDeploymentManagerKafkaTest
     val f = createKafkaFixture()
 
     def withManager(manager: K8sDeploymentManager)(action: ProcessVersion => Unit): Unit = {
-      val version = ProcessVersion(VersionId(11), ProcessName(f.scenario.id), ProcessId(1234), "testUser", Some(22))
+      val version = ProcessVersion(VersionId(11), f.scenario.name, ProcessId(1234), "testUser", Some(22))
       manager.deploy(version, DeploymentData.empty, f.scenario, None).futureValue
 
       action(version)
@@ -329,6 +330,7 @@ class K8sDeploymentManagerKafkaTest
           basicRequest
             .get(uri"http://localhost:$localPort")
             .send(backend)
+            .futureValue
             .body
             .toOption
             .get
@@ -351,7 +353,7 @@ class K8sDeploymentManagerKafkaTest
   private def cancelAndAssertCleanup(manager: K8sDeploymentManager, version: ProcessVersion) = {
     manager.cancel(version.processName, DeploymentData.systemUser).futureValue
     eventually {
-      manager.getFreshProcessStates(version.processName).futureValue shouldBe List.empty
+      manager.getProcessStates(version.processName).map(_.value).futureValue shouldBe List.empty
     }
     assertNoGarbageLeft()
   }
@@ -371,17 +373,9 @@ class K8sDeploymentManagerKafkaTest
       // e.g. when we want to run Designer locally with some proxy?
       .withValue(KafkaConfigProperties.bootstrapServersProperty(), fromAnyRef("localhost:19092"))
       .withValue(KafkaConfigProperties.property("auto.offset.reset"), fromAnyRef("earliest"))
-      .withValue("kafka.lowLevelComponentsEnabled", fromAnyRef(false))
       .withValue("exceptionHandlingConfig.topic", fromAnyRef("errors")),
-    new EmptyProcessConfigCreator
+    List.empty
   )
-
-  private def prepareManager(
-      modelData: LocalModelData = modelData,
-      deployConfig: Config = kafkaDeployConfig
-  ): K8sDeploymentManager = {
-    new K8sDeploymentManager(modelData, K8sDeploymentManagerConfig.parse(deployConfig), deployConfig)
-  }
 
   lazy val defaultSchema = """{"type":"object","properties":{"message":{"type":"string"}}}"""
 
@@ -411,8 +405,8 @@ class K8sDeploymentManagerKafkaTest
         "Value validation mode" -> "'strict'",
         "Value"                 -> "#input"
       )
-    logger.info(s"Running kafka test on ${scenario.id} $input - $output")
-    val version = ProcessVersion(VersionId(11), ProcessName(scenario.id), ProcessId(1234), "testUser", Some(22))
+    logger.info(s"Running kafka test on ${scenario.name} $input - $output")
+    val version = ProcessVersion(VersionId(11), scenario.name, ProcessId(1234), "testUser", Some(22))
     new KafkaTestFixture(
       inputTopic = input,
       outputTopic = output,
@@ -420,6 +414,13 @@ class K8sDeploymentManagerKafkaTest
       scenario = scenario,
       version = version
     )
+  }
+
+  private def prepareManager(
+      modelData: LocalModelData = modelData,
+      deployConfig: Config = kafkaDeployConfig
+  ): K8sDeploymentManager = {
+    super.prepareManager(modelData, deployConfig)
   }
 
   private class KafkaTestFixture(

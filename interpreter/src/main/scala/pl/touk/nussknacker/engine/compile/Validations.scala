@@ -1,13 +1,13 @@
 package pl.touk.nussknacker.engine.compile
 
-import cats.data.Validated.{invalid, valid}
+import cats.data.Validated.valid
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.{MissingParameters, RedundantParameters}
 import pl.touk.nussknacker.engine.api.context._
-import pl.touk.nussknacker.engine.api.definition.{Parameter, ParameterValidator}
-import pl.touk.nussknacker.engine.graph.evaluatedparam
-import pl.touk.nussknacker.engine.api.{NodeId, ParameterNaming}
+import pl.touk.nussknacker.engine.api.definition.{Parameter, Validator}
 import pl.touk.nussknacker.engine.api.expression.{TypedExpression, TypedExpressionMap}
-import pl.touk.nussknacker.engine.compiledgraph
+import pl.touk.nussknacker.engine.api.{NodeId, ParameterNaming}
+import pl.touk.nussknacker.engine.compiledgraph.TypedParameter
+import pl.touk.nussknacker.engine.graph.evaluatedparam.{Parameter => NodeParameter}
 import pl.touk.nussknacker.engine.graph.expression.Expression
 
 object Validations {
@@ -17,7 +17,7 @@ object Validations {
 
   def validateRedundantAndMissingParameters(
       parameterDefinitions: List[Parameter],
-      parameters: List[evaluatedparam.Parameter]
+      parameters: List[NodeParameter]
   )(
       implicit nodeId: NodeId
   ): ValidatedNel[PartSubGraphCompilationError, Unit] = {
@@ -31,19 +31,17 @@ object Validations {
   }
 
   def validateWithCustomValidators(
-      parameterDefinitions: List[Parameter],
-      parameters: List[(compiledgraph.evaluatedparam.TypedParameter, Parameter)]
+      parameters: List[(TypedParameter, Parameter)],
+      paramValidatorsMap: Map[String, ValidatedNel[PartSubGraphCompilationError, List[Validator]]]
   )(
       implicit nodeId: NodeId
-  ): ValidatedNel[PartSubGraphCompilationError, List[(compiledgraph.evaluatedparam.TypedParameter, Parameter)]] = {
-    val definitionsMap = parameterDefinitions.map(param => (param.name, param)).toMap
-    val validationResults = for {
-      param           <- parameters
-      paramDefinition <- definitionsMap.get(param._1.name)
-      paramValidationResult = validate(paramDefinition, param)
-    } yield paramValidationResult
-    validationResults.sequence.map(_ => parameters)
-  }
+  ): ValidatedNel[PartSubGraphCompilationError, List[(TypedParameter, Parameter)]] =
+    parameters
+      .map { case (typedParam, _) =>
+        paramValidatorsMap(typedParam.name).andThen(validator => validate(validator, typedParam))
+      }
+      .sequence
+      .map(_ => parameters)
 
   private def validateRedundancy(definedParamNamesSet: Set[String], usedParamNamesSet: Set[String])(
       implicit nodeId: NodeId
@@ -59,28 +57,29 @@ object Validations {
     if (notUsedParams.nonEmpty) MissingParameters(notUsedParams).invalidNel[Unit] else valid(())
   }
 
-  def validate[T](paramDefinition: Parameter, parameter: (compiledgraph.evaluatedparam.TypedParameter, T))(
+  def validate[T](paramDefinition: Parameter, parameter: (TypedParameter, T))(
       implicit nodeId: NodeId
-  ): ValidatedNel[PartSubGraphCompilationError, (compiledgraph.evaluatedparam.TypedParameter, T)] = {
+  ): ValidatedNel[PartSubGraphCompilationError, (TypedParameter, T)] = {
     validate(paramDefinition.validators, parameter._1).map((_, parameter._2))
   }
 
-  def validate(validators: List[ParameterValidator], parameter: compiledgraph.evaluatedparam.TypedParameter)(
+  def validate(validators: List[Validator], parameter: TypedParameter)(
       implicit nodeId: NodeId
-  ): ValidatedNel[PartSubGraphCompilationError, compiledgraph.evaluatedparam.TypedParameter] = {
+  ): ValidatedNel[PartSubGraphCompilationError, TypedParameter] = {
+    val paramWithValueAndExpressionList = parameter.typedValue match {
+      case te: TypedExpression => List((parameter.name, te.typingInfo.typingResult.valueOpt, te.expression))
+      case tem: TypedExpressionMap =>
+        tem.valueByKey.toList.map { case (branchName, expression) =>
+          (
+            ParameterNaming.getNameForBranchParameter(parameter.name, branchName),
+            expression.returnType.valueOpt,
+            expression.expression
+          )
+        }
+    }
+
     validators
       .flatMap { validator =>
-        val paramWithValueAndExpressionList = parameter.typedValue match {
-          case te: TypedExpression => List((parameter.name, te.typingInfo.typingResult.valueOpt, te.expression))
-          case tem: TypedExpressionMap =>
-            tem.valueByKey.toList.map { case (branchName, expression) =>
-              (
-                ParameterNaming.getNameForBranchParameter(parameter.name, branchName),
-                expression.returnType.valueOpt,
-                expression.expression
-              )
-            }
-        }
         paramWithValueAndExpressionList.map { case (name, value, expression) =>
           validator.isValid(name, Expression(expression.language, expression.original), value, None).toValidatedNel
         }

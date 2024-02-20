@@ -44,20 +44,23 @@ object keyed {
       extends RichFlatMapFunction[Context, ValueWithContext[KeyedValue[OutputKey, OutputValue]]]
       with LazyParameterInterpreterFunction {
 
-    protected implicit def lazyParameterInterpreterImpl: LazyParameterInterpreter = lazyParameterInterpreter
+    protected implicit def toEvaluateFunctionConverterImpl: ToEvaluateFunctionConverter = toEvaluateFunctionConverter
 
     protected def prepareInterpreter(
         key: LazyParameter[OutputKey],
         value: LazyParameter[OutputValue]
     ): Context => KeyedValue[OutputKey, OutputValue] = {
-      lazyParameterInterpreter.syncInterpretationFunction(
+      toEvaluateFunctionConverter.toEvaluateFunction(
         key.product(value).map(tuple => KeyedValue(tuple._1, tuple._2))
       )
     }
 
     protected def interpret(ctx: Context): KeyedValue[OutputKey, OutputValue]
 
-    override def flatMap(ctx: Context, out: Collector[ValueWithContext[KeyedValue[OutputKey, OutputValue]]]): Unit = {
+    override def flatMap(
+        ctx: Context,
+        out: Collector[ValueWithContext[KeyedValue[OutputKey, OutputValue]]]
+    ): Unit = {
       collectHandlingErrors(ctx, out) {
         ValueWithContext(interpret(ctx), ctx)
       }
@@ -102,9 +105,9 @@ object keyed {
   ) extends RichFlatMapFunction[Context, ValueWithContext[String]]
       with LazyParameterInterpreterFunction {
 
-    protected implicit def lazyParameterInterpreterImpl: LazyParameterInterpreter = lazyParameterInterpreter
+    protected implicit def toEvaluateFunctionConverterImpl: ToEvaluateFunctionConverter = toEvaluateFunctionConverter
 
-    private lazy val interpreter = lazyParameterInterpreter.syncInterpretationFunction(key.map(transformKey))
+    private lazy val interpreter = toEvaluateFunctionConverter.toEvaluateFunction(key.map(transformKey))
 
     protected def interpret(ctx: Context): String = interpreter(ctx)
 

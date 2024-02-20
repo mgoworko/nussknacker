@@ -14,15 +14,15 @@ import pl.touk.nussknacker.engine.schemedkafka.source.UniversalKafkaSourceFactor
 
 import scala.reflect.ClassTag
 
-class DelayedUniversalKafkaSourceFactory[K: ClassTag, V: ClassTag](
+class DelayedUniversalKafkaSourceFactory(
     schemaRegistryClientFactory: SchemaRegistryClientFactory,
     schemaBasedMessagesSerdeProvider: SchemaBasedSerdeProvider,
-    processObjectDependencies: ProcessObjectDependencies,
-    implProvider: KafkaSourceImplFactory[K, V]
-) extends UniversalKafkaSourceFactory[K, V](
+    modelDependencies: ProcessObjectDependencies,
+    implProvider: KafkaSourceImplFactory[Any, Any]
+) extends UniversalKafkaSourceFactory(
       schemaRegistryClientFactory,
       schemaBasedMessagesSerdeProvider,
-      processObjectDependencies,
+      modelDependencies,
       implProvider
     ) {
 
@@ -33,7 +33,7 @@ class DelayedUniversalKafkaSourceFactory[K: ClassTag, V: ClassTag](
 
   override protected def nextSteps(context: ValidationContext, dependencies: List[NodeDependencyValue])(
       implicit nodeId: NodeId
-  ): NodeTransformationDefinition = {
+  ): ContextTransformationDefinition = {
     case step @ TransformationStep(
           (`topicParamName`, DefinedEagerParameter(topic: String, _)) ::
           (SchemaVersionParamName, DefinedEagerParameter(version: String, _)) ::

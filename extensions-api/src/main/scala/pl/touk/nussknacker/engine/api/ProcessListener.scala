@@ -26,7 +26,6 @@ trait ProcessListener extends Lifecycle {
       id: String,
       context: Context,
       processMetaData: MetaData,
-      params: Map[String, Any],
       result: Try[Any]
   ): Unit
 
@@ -37,9 +36,18 @@ trait ProcessListener extends Lifecycle {
 trait EmptyProcessListener extends ProcessListener {
   override def nodeEntered(nodeId: String, context: Context, processMetaData: MetaData): Unit = {}
 
-  override def endEncountered(nodeId: String, ref: String, context: Context, processMetaData: MetaData): Unit = {}
+  override def endEncountered(
+      nodeId: String,
+      ref: String,
+      context: Context,
+      processMetaData: MetaData
+  ): Unit = {}
 
-  override def deadEndEncountered(lastNodeId: String, context: Context, processMetaData: MetaData): Unit = {}
+  override def deadEndEncountered(
+      lastNodeId: String,
+      context: Context,
+      processMetaData: MetaData
+  ): Unit = {}
 
   override def expressionEvaluated(
       nodeId: String,
@@ -55,7 +63,6 @@ trait EmptyProcessListener extends ProcessListener {
       id: String,
       context: Context,
       processMetaData: MetaData,
-      params: Map[String, Any],
       result: Try[Any]
   ): Unit = {}
 

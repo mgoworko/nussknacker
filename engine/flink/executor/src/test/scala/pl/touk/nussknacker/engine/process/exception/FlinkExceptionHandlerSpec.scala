@@ -8,7 +8,6 @@ import pl.touk.nussknacker.engine.api.exception.{NonTransientException, NuExcept
 import pl.touk.nussknacker.engine.api.process.ProcessObjectDependencies
 import pl.touk.nussknacker.engine.api.{Context, MetaData, StreamMetaData}
 import pl.touk.nussknacker.engine.flink.api.exception.{FlinkEspExceptionConsumer, FlinkEspExceptionConsumerProvider}
-import pl.touk.nussknacker.engine.util.namespaces.DefaultNamespacedObjectNaming
 import pl.touk.nussknacker.test.ClassLoaderWithServices
 
 import scala.jdk.CollectionConverters._
@@ -34,7 +33,7 @@ class FlinkExceptionHandlerSpec extends AnyFunSuite with Matchers {
   ) { loader =>
     new FlinkExceptionHandler(
       metaData,
-      ProcessObjectDependencies(config, DefaultNamespacedObjectNaming),
+      ProcessObjectDependencies.withConfig(config),
       listeners = Nil,
       loader
     )
@@ -45,7 +44,8 @@ class FlinkExceptionHandlerSpec extends AnyFunSuite with Matchers {
   }
 
   test("should use handler from configuration") {
-    val info = new NuExceptionInfo[NonTransientException](None, NonTransientException("", ""), Context(""))
+    val info =
+      new NuExceptionInfo[NonTransientException](None, NonTransientException("", ""), Context(""))
 
     configurableExceptionHandler.handle(info)
     TestExceptionConsumerProvider.threadLocal.get() shouldBe (metaData, config.getConfig("exceptionHandler"), info)

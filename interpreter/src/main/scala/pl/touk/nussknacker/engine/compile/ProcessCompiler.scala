@@ -3,23 +3,22 @@ package pl.touk.nussknacker.engine.compile
 import cats.data.Validated._
 import cats.data.{NonEmptyList, Validated, ValidatedNel}
 import cats.instances.list._
-import com.typesafe.config.Config
 import com.typesafe.scalalogging.LazyLogging
 import pl.touk.nussknacker.engine._
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError._
 import pl.touk.nussknacker.engine.api.context._
 import pl.touk.nussknacker.engine.api.dict.DictRegistry
-import pl.touk.nussknacker.engine.api.expression.ExpressionParser
 import pl.touk.nussknacker.engine.api.process.ComponentUseCase
 import pl.touk.nussknacker.engine.api.{MetaData, NodeId}
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.canonize.ProcessCanonizer
-import pl.touk.nussknacker.engine.compile.nodecompilation.NodeCompiler
+import pl.touk.nussknacker.engine.compile.FragmentValidator.validateUniqueFragmentOutputNames
+import pl.touk.nussknacker.engine.compile.nodecompilation.{LazyParameterCreationStrategy, NodeCompiler}
 import pl.touk.nussknacker.engine.compile.nodecompilation.NodeCompiler.NodeCompilationResult
 import pl.touk.nussknacker.engine.compiledgraph.part.{PotentiallyStartPart, TypedEnd}
 import pl.touk.nussknacker.engine.compiledgraph.{CompiledProcessParts, part}
-import pl.touk.nussknacker.engine.definition.ProcessDefinitionExtractor.ModelDefinitionWithTypes
-import pl.touk.nussknacker.engine.definition.FragmentComponentDefinitionExtractor
+import pl.touk.nussknacker.engine.definition.fragment.FragmentParametersDefinitionExtractor
+import pl.touk.nussknacker.engine.definition.model.ModelDefinitionWithClasses
 import pl.touk.nussknacker.engine.graph.node.{Source => _, _}
 import pl.touk.nussknacker.engine.resultcollector.PreventInvocationCollector
 import pl.touk.nussknacker.engine.split._
@@ -42,12 +41,12 @@ class ProcessCompiler(
 ) extends ProcessCompilerBase
     with ProcessValidator {
 
-  override def withExpressionParsers(modify: PartialFunction[ExpressionParser, ExpressionParser]): ProcessCompiler =
+  override def withLabelsDictTyper: ProcessCompiler =
     new ProcessCompiler(
       classLoader,
-      sub.withExpressionParsers(modify),
+      sub.withLabelsDictTyper,
       globalVariablesPreparer,
-      nodeCompiler.withExpressionParsers(modify),
+      nodeCompiler.withLabelsDictTyper,
       customProcessValidator
     )
 
@@ -59,19 +58,18 @@ class ProcessCompiler(
 
 trait ProcessValidator extends LazyLogging {
 
-  def validate(process: CanonicalProcess): CompilationResult[Unit] = {
+  def validate(process: CanonicalProcess, isFragment: Boolean): CompilationResult[Unit] = {
 
     try {
-      CompilationResult.map3(
-        CompilationResult(IdValidator.validate(process)),
+      CompilationResult.map4(
+        CompilationResult(IdValidator.validate(process, isFragment)),
         CompilationResult(validateWithCustomProcessValidators(process)),
+        CompilationResult(validateUniqueFragmentOutputNames(process, isFragment)),
         compile(process).map(_ => ()): CompilationResult[Unit]
-      )((_, _, compiled) => {
-        compiled
-      })
+      )((_, _, _, _) => { () })
     } catch {
       case NonFatal(e) =>
-        logger.warn(s"Unexpected error during compilation of ${process.id}", e)
+        logger.warn(s"Unexpected error during compilation of ${process.name}", e)
         CompilationResult(Invalid(NonEmptyList.of(FatalUnknownError(e.getMessage))))
     }
   }
@@ -82,7 +80,7 @@ trait ProcessValidator extends LazyLogging {
     customProcessValidator.validate(process)
   }
 
-  def withExpressionParsers(modify: PartialFunction[ExpressionParser, ExpressionParser]): ProcessValidator
+  def withLabelsDictTyper: ProcessValidator
 
   protected def compile(process: CanonicalProcess): CompilationResult[_]
 
@@ -109,7 +107,7 @@ protected trait ProcessCompilerBase {
   }
 
   private def contextWithOnlyGlobalVariables(implicit metaData: MetaData): ValidationContext =
-    globalVariablesPreparer.emptyLocalVariablesValidationContext(metaData)
+    globalVariablesPreparer.prepareValidationContextWithGlobalVariablesOnly(metaData)
 
   private def compile(splittedProcess: SplittedProcess): CompilationResult[CompiledProcessParts] =
     CompilationResult.map2(
@@ -319,17 +317,15 @@ object ProcessValidator {
 
   def default(modelData: ModelData): ProcessValidator = {
     default(
-      modelData.modelDefinitionWithTypes,
-      modelData.processConfig,
-      modelData.uiDictServices.dictRegistry,
+      modelData.modelDefinitionWithClasses,
+      modelData.designerDictServices.dictRegistry,
       modelData.customProcessValidator,
       modelData.modelClassLoader.classLoader
     )
   }
 
   def default(
-      definitionWithTypes: ModelDefinitionWithTypes,
-      processConfig: Config,
+      definitionWithTypes: ModelDefinitionWithClasses,
       dictRegistry: DictRegistry,
       customProcessValidator: CustomProcessValidator,
       classLoader: ClassLoader = getClass.getClassLoader
@@ -339,23 +335,20 @@ object ProcessValidator {
       classLoader,
       dictRegistry,
       modelDefinition.expressionConfig,
-      definitionWithTypes.typeDefinitions
-    )
-    val fragmentDefinitionExtractor = FragmentComponentDefinitionExtractor(
-      processConfig,
-      classLoader,
-      expressionCompiler
+      definitionWithTypes.classDefinitions
     )
 
     val nodeCompiler = new NodeCompiler(
       modelDefinition,
-      fragmentDefinitionExtractor,
+      new FragmentParametersDefinitionExtractor(classLoader),
       expressionCompiler,
       classLoader,
+      Seq.empty,
       PreventInvocationCollector,
-      ComponentUseCase.Validation
+      ComponentUseCase.Validation,
+      nonServicesLazyParamStrategy = LazyParameterCreationStrategy.default
     )
-    val sub = new PartSubGraphCompiler(expressionCompiler, nodeCompiler)
+    val sub = new PartSubGraphCompiler(nodeCompiler)
     new ProcessCompiler(
       classLoader,
       sub,

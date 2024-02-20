@@ -17,17 +17,26 @@ case class TestRunId(id: String)
 //TODO: this class is passed explicitly in too many places, should be more tied to ResultCollector (maybe we can have listeners embedded there?)
 case class ResultsCollectingListener(holderClass: String, runId: TestRunId) extends ProcessListener with Serializable {
 
-  def results[T]: TestResults[T] = ResultsCollectingListenerHolder.resultsForId(runId)
+  def results: TestResults = ResultsCollectingListenerHolder.resultsForId(runId)
 
-  def clean() = ResultsCollectingListenerHolder.cleanResult(runId)
+  def clean(): Unit = ResultsCollectingListenerHolder.cleanResult(runId)
 
-  override def nodeEntered(nodeId: String, context: Context, processMetaData: MetaData) = {
+  override def nodeEntered(nodeId: String, context: Context, processMetaData: MetaData): Unit = {
     ResultsCollectingListenerHolder.updateResults(runId, _.updateNodeResult(nodeId, context))
   }
 
-  override def endEncountered(nodeId: String, ref: String, context: Context, processMetaData: MetaData): Unit = {}
+  override def endEncountered(
+      nodeId: String,
+      ref: String,
+      context: Context,
+      processMetaData: MetaData
+  ): Unit = {}
 
-  override def deadEndEncountered(lastNodeId: String, context: Context, processMetaData: MetaData) = {}
+  override def deadEndEncountered(
+      lastNodeId: String,
+      context: Context,
+      processMetaData: MetaData
+  ): Unit = {}
 
   override def expressionEvaluated(
       nodeId: String,
@@ -36,7 +45,7 @@ case class ResultsCollectingListener(holderClass: String, runId: TestRunId) exte
       context: Context,
       processMetaData: MetaData,
       result: Any
-  ) = {
+  ): Unit = {
     ResultsCollectingListenerHolder.updateResults(
       runId,
       _.updateExpressionResult(nodeId, context, expressionId, result)
@@ -48,9 +57,8 @@ case class ResultsCollectingListener(holderClass: String, runId: TestRunId) exte
       id: String,
       context: Context,
       processMetaData: MetaData,
-      params: Map[String, Any],
       result: Try[Any]
-  ) = {}
+  ): Unit = {}
 
   override def exceptionThrown(exceptionInfo: NuExceptionInfo[_ <: Throwable]): Unit =
     ResultsCollectingListenerHolder.updateResults(runId, _.updateExceptionResult(exceptionInfo))
@@ -59,18 +67,18 @@ case class ResultsCollectingListener(holderClass: String, runId: TestRunId) exte
 
 object ResultsCollectingListenerHolder {
 
-  private var results = Map[TestRunId, TestResults[_]]()
+  private var results = Map[TestRunId, TestResults]()
 
   // TODO: casting is not so nice, but currently no other idea...
-  def resultsForId[T](id: TestRunId): TestResults[T] = results(id).asInstanceOf[TestResults[T]]
+  def resultsForId(id: TestRunId): TestResults = results(id)
 
-  def registerRun[T](variableEncoder: Any => T): ResultsCollectingListener = synchronized {
-    val runId = TestRunId(UUID.randomUUID().toString)
-    results += (runId -> new TestResults[T](Map(), Map(), Map(), List(), variableEncoder))
+  def registerRun: ResultsCollectingListener = synchronized {
+    val runId = TestRunId.generate
+    results += (runId -> TestResults(Map(), Map(), Map(), List()))
     ResultsCollectingListener(getClass.getCanonicalName, runId)
   }
 
-  private[testmode] def updateResults(runId: TestRunId, action: TestResults[_] => TestResults[_]): Unit = synchronized {
+  private[testmode] def updateResults(runId: TestRunId, action: TestResults => TestResults): Unit = synchronized {
     val current = results.getOrElse(runId, throw new IllegalArgumentException("Run was not registered..."))
     results += (runId -> action(current))
   }

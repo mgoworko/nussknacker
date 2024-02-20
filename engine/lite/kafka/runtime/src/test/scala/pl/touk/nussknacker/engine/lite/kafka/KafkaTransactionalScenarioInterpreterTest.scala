@@ -8,13 +8,14 @@ import org.scalatest.funsuite.FixtureAnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.{Assertion, OptionValues, Outcome}
 import pl.touk.nussknacker.engine.api._
-import pl.touk.nussknacker.engine.api.process.EmptyProcessConfigCreator
 import pl.touk.nussknacker.engine.build.{GraphBuilder, ScenarioBuilder}
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.kafka.KafkaSpec
 import pl.touk.nussknacker.engine.kafka.exception.KafkaExceptionInfo
 import pl.touk.nussknacker.engine.lite.ScenarioInterpreterFactory
 import pl.touk.nussknacker.engine.lite.api.runtimecontext.LiteEngineRuntimeContextPreparer
+import pl.touk.nussknacker.engine.lite.components.LiteBaseComponentProvider
+import pl.touk.nussknacker.engine.lite.kafka.TestComponentProvider.{SinkValueParamName, TopicParamName}
 import pl.touk.nussknacker.engine.lite.metrics.dropwizard.DropwizardMetricsProviderFactory
 import pl.touk.nussknacker.engine.spel.Implicits._
 import pl.touk.nussknacker.engine.testing.LocalModelData
@@ -39,9 +40,8 @@ class KafkaTransactionalScenarioInterpreterTest
     with PatientScalaFutures
     with OptionValues {
 
-  import pl.touk.nussknacker.engine.kafka.KafkaTestUtils.richConsumer
   import KafkaTransactionalScenarioInterpreter._
-  import KafkaFactory._
+  import pl.touk.nussknacker.engine.kafka.KafkaTestUtils.richConsumer
 
   private val metricRegistry = new MetricRegistry
   private val preparer = new LiteEngineRuntimeContextPreparer(new DropwizardMetricsProviderFactory(metricRegistry))
@@ -196,7 +196,7 @@ class KafkaTransactionalScenarioInterpreterTest
 
       val error = kafkaClient.createConsumer().consumeWithJson[KafkaExceptionInfo](errorTopic).take(1).head.message()
       error.nodeId shouldBe Some("throw on 0")
-      error.processName shouldBe scenario.id
+      error.processName shouldBe scenario.name
       error.exceptionInput shouldBe Some("1 / #input.length")
     }
   }
@@ -362,13 +362,13 @@ class KafkaTransactionalScenarioInterpreterTest
 
     runScenarioWithoutErrors(fixture, scenario) {
       kafkaClient
-        .sendRawMessage(fixture.inputTopic, Array.empty, TestComponentProvider.failingInputValue.getBytes)
+        .sendRawMessage(fixture.inputTopic, Array.empty, TestComponentProvider.FailingInputValue.getBytes)
         .futureValue
       val error =
         kafkaClient.createConsumer().consumeWithJson[KafkaExceptionInfo](fixture.errorTopic).take(1).head.message()
 
       error.nodeId shouldBe Some("source")
-      error.processName shouldBe scenario.id
+      error.processName shouldBe scenario.name
       // shouldn't it be just in error.message?
       error.exceptionInput.value should include(TestComponentProvider.SourceFailure.getMessage)
     }
@@ -447,10 +447,13 @@ class KafkaTransactionalScenarioInterpreterTest
     output
   }
 
-  private def modelData(config: Config) = LocalModelData(config, new EmptyProcessConfigCreator)
+  private def modelData(config: Config) =
+    LocalModelData(
+      config,
+      TestComponentProvider.Components ::: LiteBaseComponentProvider.Components
+    )
 
   private def adjustConfig(errorTopic: String, config: Config) = config
-    .withValue("components.kafkaSources.enabled", fromAnyRef(true))
     .withValue("kafka.\"auto.offset.reset\"", fromAnyRef("earliest"))
     .withValue("exceptionHandlingConfig.topic", fromAnyRef(errorTopic))
     .withValue("waitAfterFailureDelay", fromAnyRef("1 millis"))

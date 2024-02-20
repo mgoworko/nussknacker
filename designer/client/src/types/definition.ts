@@ -42,7 +42,6 @@ export interface UIParameter {
     name: string;
     typ: TypingResult;
     editor: $TodoType;
-    validators: $TodoType;
     defaultValue: {
         language: string;
         expression: string;
@@ -51,4 +50,5 @@ export interface UIParameter {
     variablesToHide: Array<string>;
     branchParam: boolean;
     hintText?: string;
+    label: string;
 }

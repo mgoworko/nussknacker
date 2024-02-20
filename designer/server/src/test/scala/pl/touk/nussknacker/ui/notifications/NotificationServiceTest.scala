@@ -14,17 +14,14 @@ import pl.touk.nussknacker.engine.api.process.{ProcessIdWithName, ProcessName}
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.deployment.{DeploymentData, DeploymentId, ExternalDeploymentId}
-import pl.touk.nussknacker.engine.util.SynchronousExecutionContext._
-import pl.touk.nussknacker.restmodel.scenariodetails
 import pl.touk.nussknacker.test.{EitherValuesDetailedMessage, PatientScalaFutures}
-import pl.touk.nussknacker.ui.api.helpers.ProcessTestData.{existingSinkFactory, existingSourceFactory}
-import pl.touk.nussknacker.ui.api.helpers.TestCategories.Category1
-import pl.touk.nussknacker.ui.api.helpers.TestProcessingTypes.Streaming
-import pl.touk.nussknacker.ui.api.helpers.{TestFactory, WithHsqlDbTesting}
+import pl.touk.nussknacker.test.base.db.WithHsqlDbTesting
+import pl.touk.nussknacker.test.utils.scalas.DBIOActionValues
+import pl.touk.nussknacker.test.utils.domain.{ProcessTestData, TestFactory}
 import pl.touk.nussknacker.ui.listener.ProcessChangeListener
 import pl.touk.nussknacker.ui.process.deployment.LoggedUserConversions._
 import pl.touk.nussknacker.ui.process.deployment.{DeploymentManagerDispatcher, DeploymentServiceImpl, ScenarioResolver}
-import pl.touk.nussknacker.ui.process.processingtypedata.MapBasedProcessingTypeDataProvider
+import pl.touk.nussknacker.ui.process.processingtype.ProcessingTypeDataProvider
 import pl.touk.nussknacker.ui.process.repository.ProcessRepository.CreateProcessAction
 import pl.touk.nussknacker.ui.process.repository.{
   DBIOActionRunner,
@@ -32,12 +29,11 @@ import pl.touk.nussknacker.ui.process.repository.{
   ScenarioWithDetailsEntity
 }
 import pl.touk.nussknacker.ui.security.api.LoggedUser
-import pl.touk.nussknacker.ui.util.DBIOActionValues
 import pl.touk.nussknacker.ui.validation.UIProcessValidator
 
-import java.net.URI
 import java.time.temporal.ChronoUnit
 import java.time.{Clock, Instant, ZoneId}
+import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success, Try}
@@ -60,7 +56,7 @@ class NotificationServiceTest
   private val processRepository       = TestFactory.newFetchingProcessRepository(testDbRef)
   private val writeProcessRepository  = TestFactory.newWriteProcessRepository(testDbRef)
   private val actionRepository =
-    DbProcessActionRepository.create(testDbRef, MapBasedProcessingTypeDataProvider.withEmptyCombinedData(Map.empty))
+    new DbProcessActionRepository(testDbRef, ProcessingTypeDataProvider.withEmptyCombinedData(Map.empty))
 
   private val expectedRefreshAfterSuccess = List(DataToRefresh.versions, DataToRefresh.activity, DataToRefresh.state)
   private val expectedRefreshAfterFail    = List(DataToRefresh.state)
@@ -73,8 +69,8 @@ class NotificationServiceTest
     val deploymentManager                        = mock[DeploymentManager]
     val (deploymentService, notificationService) = createServices(deploymentManager)
 
-    def notificationsFor(user: LoggedUser, after: Option[Instant] = None): List[Notification] =
-      notificationService.notifications(after)(user, ctx).futureValue
+    def notificationsFor(user: LoggedUser): List[Notification] =
+      notificationService.notifications(user, global).futureValue
 
     def deployProcess(
         givenDeployResult: Try[Option[ExternalDeploymentId]],
@@ -84,7 +80,7 @@ class NotificationServiceTest
         deploymentManager.deploy(any[ProcessVersion], any[DeploymentData], any[CanonicalProcess], any[Option[String]])
       ).thenReturn(Future.fromTry(givenDeployResult))
       when(deploymentManager.processStateDefinitionManager).thenReturn(SimpleProcessStateDefinitionManager)
-      deploymentService.deployProcessAsync(processIdWithName, None, None)(user, ctx).flatten.futureValue
+      deploymentService.deployProcessAsync(processIdWithName, None, None)(user, global).flatten.futureValue
     }
 
     val userForSuccess = TestFactory.adminUser("successUser", "successUser")
@@ -99,10 +95,9 @@ class NotificationServiceTest
 
     notificationsFor(userForFail).map(_.toRefresh) shouldBe List(expectedRefreshAfterFail)
 
-    notificationsFor(userForFail, Some(currentInstant.minusSeconds(20))).map(_.toRefresh) shouldBe List(
+    notificationsFor(userForFail).map(_.toRefresh) shouldBe List(
       expectedRefreshAfterFail
     )
-    notificationsFor(userForFail, Some(currentInstant.plusSeconds(20))).map(_.toRefresh) shouldBe Symbol("empty")
 
     currentInstant = currentInstant.plus(1, ChronoUnit.HOURS)
     notificationsFor(userForFail).map(_.toRefresh) shouldBe Symbol("empty")
@@ -128,17 +123,19 @@ class NotificationServiceTest
         Future.fromTry(givenDeployResult)
       }
       when(deploymentManager.processStateDefinitionManager).thenReturn(SimpleProcessStateDefinitionManager)
-      deploymentService.deployProcessAsync(processIdWithName, None, None)(user, ctx).flatten.futureValue
+      deploymentService.deployProcessAsync(processIdWithName, None, None)(user, global).flatten.futureValue
     }
 
     val user = TestFactory.adminUser("fooUser", "fooUser")
     deployProcess(Success(None), user)
-    val notificationsAfterDeploy = notificationService.notifications(None)(user, ctx).futureValue
+    val notificationsAfterDeploy = notificationService.notifications(user, global).futureValue
     notificationsAfterDeploy should have length 1
     val deployNotificationId = notificationsAfterDeploy.head.id
 
-    deploymentService.markActionExecutionFinished(Streaming, passedDeploymentId.value.toActionIdOpt.value).futureValue
-    val notificationAfterExecutionFinished = notificationService.notifications(None)(user, ctx).futureValue
+    deploymentService
+      .markActionExecutionFinished("Streaming", passedDeploymentId.value.toActionIdOpt.value)
+      .futureValue
+    val notificationAfterExecutionFinished = notificationService.notifications(user, global).futureValue
     // old notification about deployment is replaced by notification about deployment execution finished which has other id
     notificationAfterExecutionFinished should have length 1
     notificationAfterExecutionFinished.head.id should not equal deployNotificationId
@@ -151,10 +148,10 @@ class NotificationServiceTest
     when(
       deploymentManager.getProcessState(any[ProcessIdWithName], any[Option[ProcessAction]])(any[DataFreshnessPolicy])
     )
-      .thenReturn(Future.successful(WithDataFreshnessStatus(notDeployed, cached = false)))
+      .thenReturn(Future.successful(WithDataFreshnessStatus.fresh(notDeployed)))
     val managerDispatcher = mock[DeploymentManagerDispatcher]
-    when(managerDispatcher.deploymentManager(any[String])).thenReturn(Some(deploymentManager))
-    when(managerDispatcher.deploymentManagerUnsafe(any[String])).thenReturn(deploymentManager)
+    when(managerDispatcher.deploymentManager(any[String])(any[LoggedUser])).thenReturn(Some(deploymentManager))
+    when(managerDispatcher.deploymentManagerUnsafe(any[String])(any[LoggedUser])).thenReturn(deploymentManager)
     val config              = NotificationConfig(20 minutes)
     val notificationService = new NotificationServiceImpl(actionRepository, dbioRunner, config, clock)
     val deploymentService = new DeploymentServiceImpl(
@@ -162,8 +159,8 @@ class NotificationServiceTest
       processRepository,
       actionRepository,
       dbioRunner,
-      mock[UIProcessValidator],
-      mock[ScenarioResolver],
+      mock[ProcessingTypeDataProvider[UIProcessValidator, _]],
+      mock[ProcessingTypeDataProvider[ScenarioResolver, _]],
       mock[ProcessChangeListener],
       None,
       clock
@@ -187,14 +184,14 @@ class NotificationServiceTest
   private def saveSampleProcess(processName: ProcessName) = {
     val sampleScenario = ScenarioBuilder
       .streaming(processName.value)
-      .source("source", existingSourceFactory)
-      .emptySink("sink", existingSinkFactory)
+      .source("source", ProcessTestData.existingSourceFactory)
+      .emptySink("sink", ProcessTestData.existingSinkFactory)
     val action =
       CreateProcessAction(
-        processName,
-        Category1,
-        sampleScenario,
-        Streaming,
+        processName = processName,
+        category = "Default",
+        canonicalProcess = sampleScenario,
+        processingType = "Streaming",
         isFragment = false,
         forwardedUserName = None
       )

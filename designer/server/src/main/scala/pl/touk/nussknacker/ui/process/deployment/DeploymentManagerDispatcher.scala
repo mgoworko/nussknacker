@@ -1,9 +1,8 @@
 package pl.touk.nussknacker.ui.process.deployment
 
 import pl.touk.nussknacker.engine.api.deployment.DeploymentManager
-import pl.touk.nussknacker.engine.api.process.ProcessId
-import pl.touk.nussknacker.engine.api.process.ProcessingType
-import pl.touk.nussknacker.ui.process.processingtypedata.ProcessingTypeDataProvider
+import pl.touk.nussknacker.engine.api.process.{ProcessIdWithName, ProcessingType}
+import pl.touk.nussknacker.ui.process.processingtype.ProcessingTypeDataProvider
 import pl.touk.nussknacker.ui.process.repository.FetchingProcessRepository
 import pl.touk.nussknacker.ui.security.api.LoggedUser
 
@@ -15,17 +14,17 @@ class DeploymentManagerDispatcher(
 ) {
 
   def deploymentManagerUnsafe(
-      processId: ProcessId
+      processId: ProcessIdWithName
   )(implicit ec: ExecutionContext, user: LoggedUser): Future[DeploymentManager] = {
     processRepository.fetchProcessingType(processId).map(deploymentManagerUnsafe)
   }
 
-  def deploymentManager(typ: ProcessingType): Option[DeploymentManager] = {
-    managers.forType(typ)
+  def deploymentManager(processingType: ProcessingType)(implicit user: LoggedUser): Option[DeploymentManager] = {
+    managers.forType(processingType)
   }
 
-  def deploymentManagerUnsafe(typ: ProcessingType): DeploymentManager = {
-    managers.forTypeUnsafe(typ)
+  def deploymentManagerUnsafe(processingType: ProcessingType)(implicit user: LoggedUser): DeploymentManager = {
+    managers.forTypeUnsafe(processingType)
   }
 
 }

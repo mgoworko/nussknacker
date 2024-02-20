@@ -8,9 +8,9 @@ import pl.touk.nussknacker.engine.api.process.ProcessName
 import pl.touk.nussknacker.engine.api.test.ScenarioTestData
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.deployment.DeploymentData
-import pl.touk.nussknacker.engine.process.ExecutionConfigPreparer
-import pl.touk.nussknacker.engine.process.compiler.TestFlinkProcessCompiler
+import pl.touk.nussknacker.engine.process.compiler.TestFlinkProcessCompilerDataFactory
 import pl.touk.nussknacker.engine.process.registrar.FlinkProcessRegistrar
+import pl.touk.nussknacker.engine.process.{ExecutionConfigPreparer, FlinkJobConfig}
 import pl.touk.nussknacker.engine.testmode.TestProcess.TestResults
 import pl.touk.nussknacker.engine.testmode.{
   ResultsCollectingListener,
@@ -22,18 +22,16 @@ import scala.util.Using
 
 object FlinkTestMain extends FlinkRunner {
 
-  def run[T](
+  def run(
       modelData: ModelData,
       process: CanonicalProcess,
       scenarioTestData: ScenarioTestData,
-      configuration: Configuration,
-      variableEncoder: Any => T
-  ): TestResults[T] = {
+      configuration: Configuration
+  ): TestResults = {
     val processVersion = ProcessVersion.empty.copy(processName =
       ProcessName("snapshot version")
     ) // testing process may be unreleased, so it has no version
-    new FlinkTestMain(modelData, process, scenarioTestData, processVersion, DeploymentData.empty, configuration)
-      .runTest(variableEncoder)
+    new FlinkTestMain(modelData, process, scenarioTestData, processVersion, DeploymentData.empty, configuration).runTest
   }
 
 }
@@ -47,8 +45,8 @@ class FlinkTestMain(
     val configuration: Configuration
 ) extends FlinkStubbedRunner {
 
-  def runTest[T](variableEncoder: Any => T): TestResults[T] =
-    Using.resource(ResultsCollectingListenerHolder.registerRun(variableEncoder)) { collectingListener =>
+  def runTest: TestResults =
+    Using.resource(ResultsCollectingListenerHolder.registerRun) { collectingListener =>
       val resultCollector = new TestServiceInvocationCollector(collectingListener.runId)
       val registrar       = prepareRegistrar(collectingListener, scenarioTestData)
       val env             = createEnv
@@ -63,14 +61,13 @@ class FlinkTestMain(
       scenarioTestData: ScenarioTestData
   ): FlinkProcessRegistrar = {
     FlinkProcessRegistrar(
-      new TestFlinkProcessCompiler(
-        modelData.configCreator,
-        modelData.processConfig,
-        collectingListener,
+      TestFlinkProcessCompilerDataFactory(
         process,
-        modelData.objectNaming,
-        scenarioTestData
+        scenarioTestData,
+        modelData,
+        collectingListener
       ),
+      FlinkJobConfig.parse(modelData.modelConfig).copy(rocksDB = None),
       ExecutionConfigPreparer.defaultChain(modelData)
     )
   }

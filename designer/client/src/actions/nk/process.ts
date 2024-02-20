@@ -1,33 +1,33 @@
 import { ThunkAction } from "../reduxTypes";
-import { Process, ProcessDefinitionData, ProcessId } from "../../types";
+import { ProcessDefinitionData, ScenarioGraph } from "../../types";
 import HttpService from "./../../http/HttpService";
-import { ProcessType, ProcessVersionId } from "../../components/Process/types";
+import { Scenario, ProcessName, ProcessVersionId } from "../../components/Process/types";
 import { displayProcessActivity } from "./displayProcessActivity";
 import { ActionCreators as UndoActionCreators } from "redux-undo";
 import { getProcessDefinitionData } from "../../reducers/selectors/settings";
 
 export type ScenarioActions =
     | { type: "CORRECT_INVALID_SCENARIO"; processDefinitionData: ProcessDefinitionData }
-    | { type: "DISPLAY_PROCESS"; fetchedProcessDetails: ProcessType };
+    | { type: "DISPLAY_PROCESS"; scenario: Scenario };
 
-export function fetchProcessToDisplay(processId: ProcessId, versionId?: ProcessVersionId): ThunkAction<Promise<ProcessType>> {
+export function fetchProcessToDisplay(processName: ProcessName, versionId?: ProcessVersionId): ThunkAction<Promise<Scenario>> {
     return (dispatch) => {
         dispatch({ type: "PROCESS_FETCH" });
 
-        return HttpService.fetchProcessDetails(processId, versionId).then((response) => {
-            dispatch(displayTestCapabilities(response.data.json));
+        return HttpService.fetchProcessDetails(processName, versionId).then((response) => {
+            dispatch(displayTestCapabilities(processName, response.data.scenarioGraph));
             dispatch({
                 type: "DISPLAY_PROCESS",
-                fetchedProcessDetails: response.data,
+                scenario: response.data,
             });
             return response.data;
         });
     };
 }
 
-export function loadProcessState(processId: ProcessId): ThunkAction {
+export function loadProcessState(processName: ProcessName): ThunkAction {
     return (dispatch) =>
-        HttpService.fetchProcessState(processId).then(({ data }) =>
+        HttpService.fetchProcessState(processName).then(({ data }) =>
             dispatch({
                 type: "PROCESS_STATE_LOADED",
                 processState: data,
@@ -35,9 +35,9 @@ export function loadProcessState(processId: ProcessId): ThunkAction {
         );
 }
 
-export function fetchTestFormParameters(processDetails: Process) {
+export function fetchTestFormParameters(processName: ProcessName, scenarioGraph: ScenarioGraph) {
     return (dispatch) =>
-        HttpService.getTestFormParameters(processDetails).then(({ data }) => {
+        HttpService.getTestFormParameters(processName, scenarioGraph).then(({ data }) => {
             dispatch({
                 type: "UPDATE_TEST_FORM_PARAMETERS",
                 testFormParameters: data,
@@ -45,9 +45,9 @@ export function fetchTestFormParameters(processDetails: Process) {
         });
 }
 
-export function displayTestCapabilities(processDetails: Process) {
+export function displayTestCapabilities(processName: ProcessName, scenarioGraph: ScenarioGraph) {
     return (dispatch) =>
-        HttpService.getTestCapabilities(processDetails).then(({ data }) =>
+        HttpService.getTestCapabilities(processName, scenarioGraph).then(({ data }) =>
             dispatch({
                 type: "UPDATE_TEST_CAPABILITIES",
                 capabilities: data,
@@ -55,13 +55,13 @@ export function displayTestCapabilities(processDetails: Process) {
         );
 }
 
-export function displayCurrentProcessVersion(processId: ProcessId) {
-    return fetchProcessToDisplay(processId);
+export function displayCurrentProcessVersion(processName: ProcessName) {
+    return fetchProcessToDisplay(processName);
 }
 
-export function displayScenarioVersion(processId: ProcessId, versionId: ProcessVersionId): ThunkAction {
+export function displayScenarioVersion(processName: ProcessName, versionId: ProcessVersionId): ThunkAction {
     return async (dispatch, getState) => {
-        await dispatch(fetchProcessToDisplay(processId, versionId));
+        await dispatch(fetchProcessToDisplay(processName, versionId));
         const processDefinitionData = getProcessDefinitionData(getState());
         dispatch({ type: "CORRECT_INVALID_SCENARIO", processDefinitionData });
     };
@@ -78,7 +78,7 @@ export function hideRunProcessDetails() {
     return { type: "HIDE_RUN_PROCESS_DETAILS" };
 }
 
-export function addAttachment(processId: ProcessId, processVersionId: ProcessVersionId, file: File) {
+export function addAttachment(processName: ProcessName, processVersionId: ProcessVersionId, file: File) {
     return (dispatch) =>
-        HttpService.addAttachment(processId, processVersionId, file).then(() => dispatch(displayProcessActivity(processId)));
+        HttpService.addAttachment(processName, processVersionId, file).then(() => dispatch(displayProcessActivity(processName)));
 }

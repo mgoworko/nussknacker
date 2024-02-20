@@ -1,17 +1,13 @@
 package pl.touk.nussknacker.engine.schemedkafka.schemaregistry.confluent.serialization
 
-import io.confluent.kafka.schemaregistry.ParsedSchema
 import io.confluent.kafka.schemaregistry.avro.AvroSchema
 import io.confluent.kafka.serializers.KafkaAvroSerializerConfig
 import org.apache.kafka.common.header.Headers
 import org.apache.kafka.common.serialization.Serializer
+import pl.touk.nussknacker.engine.kafka.KafkaConfig
 import pl.touk.nussknacker.engine.schemedkafka.schema.{AvroSchemaEvolution, DefaultAvroSchemaEvolution}
 import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.confluent.ConfluentUtils
 import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.confluent.client.ConfluentSchemaRegistryClient
-import pl.touk.nussknacker.engine.kafka.KafkaConfig
-import pl.touk.nussknacker.engine.schemedkafka.RuntimeSchemaData
-import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.SchemaRegistryClient
-import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.serialization.SchemaRegistryBasedSerializerFactory
 
 import java.util
 import scala.jdk.CollectionConverters._
@@ -24,13 +20,13 @@ class ConfluentKafkaAvroSerializer(
     confluentSchemaRegistryClient: ConfluentSchemaRegistryClient,
     schemaEvolutionHandler: AvroSchemaEvolution,
     avroSchemaOpt: Option[AvroSchema],
-    var isKey: Boolean
+    _isKey: Boolean
 ) extends AbstractConfluentKafkaAvroSerializer(schemaEvolutionHandler)
     with Serializer[Any] {
 
   schemaRegistry = confluentSchemaRegistryClient.client
 
-  configure(kafkaConfig.kafkaProperties.getOrElse(Map.empty).asJava, isKey)
+  configure(kafkaConfig.kafkaProperties.getOrElse(Map.empty).asJava, _isKey)
 
   override def configure(configs: util.Map[String, _], isKey: Boolean): Unit = {
     val avroConfig = new KafkaAvroSerializerConfig(configs)
@@ -47,6 +43,8 @@ class ConfluentKafkaAvroSerializer(
     serialize(avroSchemaOpt, topic, data, isKey, headers)
   }
 
+  // It is a work-around for two different close() methods (one throws IOException and another not) in AbstractKafkaSchemaSerDe and in Serializer
+  // It is needed only for scala 2.12
   override def close(): Unit = {}
 }
 
@@ -63,29 +61,7 @@ object ConfluentKafkaAvroSerializer {
       schemaRegistryClient,
       new DefaultAvroSchemaEvolution,
       avroSchemaOpt,
-      isKey = isKey
-    )
-  }
-
-}
-
-object ConfluentAvroSerializerFactory extends SchemaRegistryBasedSerializerFactory {
-
-  def createSerializer(
-      schemaRegistryClient: SchemaRegistryClient,
-      kafkaConfig: KafkaConfig,
-      schemaOpt: Option[RuntimeSchemaData[ParsedSchema]],
-      isKey: Boolean
-  ): Serializer[Any] = {
-    val avroSchemaOpt = schemaOpt.map(_.schema).map {
-      case schema: AvroSchema => schema
-      case schema => throw new IllegalArgumentException(s"Not supported schema type: ${schema.schemaType()}")
-    }
-    ConfluentKafkaAvroSerializer(
-      kafkaConfig,
-      schemaRegistryClient.asInstanceOf[ConfluentSchemaRegistryClient],
-      avroSchemaOpt,
-      isKey = isKey
+      _isKey = isKey
     )
   }
 

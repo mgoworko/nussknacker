@@ -3,20 +3,21 @@ import Dropzone from "react-dropzone";
 import { useTranslation } from "react-i18next";
 import { addAttachment } from "../../actions/nk";
 import { useDispatch, useSelector } from "react-redux";
-import { getProcessId, getProcessVersionId } from "../../reducers/selectors/graph";
+import { getProcessName, getProcessVersionId } from "../../reducers/selectors/graph";
 import ButtonUpload from "../../assets/img/icons/buttonUpload.svg";
 import { NodeInput } from "../withFocus";
-import { AddAttachmentsWrapper, AttachmentButton, AttachmentButtonText, AttachmentDropZone, AttachmentsContainer } from "./StyledAttach";
+import { AddAttachmentsWrapper, AttachmentButton, AttachmentDropZone, AttachmentsContainer } from "./StyledAttach";
+import { Typography } from "@mui/material";
 
 export function AddAttachment() {
     const { t } = useTranslation();
     const dispatch = useDispatch();
-    const processId = useSelector(getProcessId);
+    const processName = useSelector(getProcessName);
     const processVersionId = useSelector(getProcessVersionId);
 
     const addFiles = useCallback(
-        (files) => files.forEach((file) => dispatch(addAttachment(processId, processVersionId, file))),
-        [dispatch, processId, processVersionId],
+        (files) => files.forEach((file) => dispatch(addAttachment(processName, processVersionId, file))),
+        [dispatch, processName, processVersionId],
     );
 
     return (
@@ -28,9 +29,7 @@ export function AddAttachment() {
                             <AttachmentButton>
                                 <ButtonUpload />
                             </AttachmentButton>
-                            <AttachmentButtonText>
-                                <span>{t("attachments.buttonText", "drop or choose a file")}</span>
-                            </AttachmentButtonText>
+                            <Typography variant={"caption"}>{t("attachments.buttonText", "drop or choose a file")}</Typography>
                         </AttachmentDropZone>
                         <NodeInput {...getInputProps()} />
                     </AttachmentsContainer>

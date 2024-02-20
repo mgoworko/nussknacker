@@ -2,64 +2,67 @@ package pl.touk.nussknacker.engine.management
 
 import com.typesafe.scalalogging.LazyLogging
 import org.apache.flink.api.common.JobStatus
-import pl.touk.nussknacker.engine.BaseModelData
 import pl.touk.nussknacker.engine.api.ProcessVersion
 import pl.touk.nussknacker.engine.api.deployment._
 import pl.touk.nussknacker.engine.api.deployment.simple.SimpleStateStatus
 import pl.touk.nussknacker.engine.api.deployment.simple.SimpleStateStatus.ProblemStateStatus
-import pl.touk.nussknacker.engine.api.namespaces.{FlinkUsageKey, NamingContext}
 import pl.touk.nussknacker.engine.api.process.{ProcessId, ProcessName, VersionId}
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.deployment.{DeploymentId, ExternalDeploymentId, User}
 import pl.touk.nussknacker.engine.management.FlinkRestManager.JobDetails
-import pl.touk.nussknacker.engine.management.rest.HttpFlinkClient
+import pl.touk.nussknacker.engine.management.rest.FlinkClient
 import pl.touk.nussknacker.engine.management.rest.flinkRestModel.JobOverview
-import sttp.client3._
+import pl.touk.nussknacker.engine.{BaseModelData, DeploymentManagerDependencies}
 
-import java.io.File
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.Future
 
-class FlinkRestManager(config: FlinkConfig, modelData: BaseModelData, mainClassName: String)(
-    implicit ec: ExecutionContext,
-    backend: SttpBackend[Future, Any],
-    deploymentService: ProcessingTypeDeploymentService
-) extends FlinkDeploymentManager(modelData, config.shouldVerifyBeforeDeploy, mainClassName)
+class FlinkRestManager(
+    client: FlinkClient,
+    config: FlinkConfig,
+    modelData: BaseModelData,
+    dependencies: DeploymentManagerDependencies,
+    mainClassName: String
+) extends FlinkDeploymentManager(modelData, dependencies, config.shouldVerifyBeforeDeploy, mainClassName)
     with LazyLogging {
 
-  protected lazy val jarFile: File = new FlinkModelJar().buildJobJar(modelData)
+  import dependencies._
 
-  private val client = new HttpFlinkClient(config)
+  private val modelJarProvider = new FlinkModelJarProvider(modelData.modelClassLoaderUrls)
 
   private val slotsChecker = new FlinkSlotsChecker(client)
 
-  override def getFreshProcessStates(name: ProcessName): Future[List[StatusDetails]] = {
-    val preparedName =
-      modelData.objectNaming.prepareName(name.value, modelData.processConfig, new NamingContext(FlinkUsageKey))
+  override def getProcessStates(
+      name: ProcessName
+  )(implicit freshnessPolicy: DataFreshnessPolicy): Future[WithDataFreshnessStatus[List[StatusDetails]]] = {
+    val preparedName = modelData.namingStrategy.prepareName(name.value)
+
     client
       .findJobsByName(preparedName)
-      .flatMap(jobs =>
-        Future.sequence(
-          jobs
-            .map(job =>
-              withJobDetails(job.jid, name).map { jobDetails =>
-                // TODO: return error when there's no correct version in process
-                // currently we're rather lax on this, so that this change is backward-compatible
-                // we log debug here for now, since it's invoked v. often
-                if (jobDetails.isEmpty) {
-                  logger.debug(s"No correct job details in deployed scenario: ${job.name}")
+      .flatMap(result =>
+        Future
+          .sequence(
+            result.value
+              .map(job =>
+                withJobDetails(job.jid, name).map { jobDetails =>
+                  // TODO: return error when there's no correct version in process
+                  // currently we're rather lax on this, so that this change is backward-compatible
+                  // we log debug here for now, since it's invoked v. often
+                  if (jobDetails.isEmpty) {
+                    logger.debug(s"No correct job details in deployed scenario: ${job.name}")
+                  }
+                  StatusDetails(
+                    mapJobStatus(job),
+                    jobDetails.flatMap(_.deploymentId),
+                    Some(ExternalDeploymentId(job.jid)),
+                    version = jobDetails.map(_.version),
+                    startTime = Some(job.`start-time`),
+                    attributes = Option.empty,
+                    errors = List.empty
+                  )
                 }
-                StatusDetails(
-                  mapJobStatus(job),
-                  jobDetails.flatMap(_.deploymentId),
-                  Some(ExternalDeploymentId(job.jid)),
-                  version = jobDetails.map(_.version),
-                  startTime = Some(job.`start-time`),
-                  attributes = Option.empty,
-                  errors = List.empty
-                )
-              }
-            )
-        )
+              )
+          )
+          .map(WithDataFreshnessStatus(_, cached = result.cached)) // TODO: How to do it nicer?
       )
   }
 
@@ -109,8 +112,9 @@ class FlinkRestManager(config: FlinkConfig, modelData: BaseModelData, mainClassN
         retry
           .Pause(config.maxChecks, config.delay)
           .apply {
-            getFreshProcessStates(processName).map { statuses =>
-              statuses
+            implicit val freshnessPolicy: DataFreshnessPolicy = DataFreshnessPolicy.Fresh
+            getProcessStates(processName).map { statuses =>
+              statuses.value
                 .find(details =>
                   details.externalDeploymentId
                     .contains(deploymentId) && details.status == SimpleStateStatus.DuringDeploy
@@ -130,7 +134,6 @@ class FlinkRestManager(config: FlinkConfig, modelData: BaseModelData, mainClassN
       .getOrElse(Future.successful(()))
   }
 
-  // TODO: cache by jobId?
   private def withJobDetails(jobId: String, name: ProcessName): Future[Option[JobDetails]] = {
     client.getJobConfig(jobId).map { executionConfig =>
       val userConfig = executionConfig.`user-config`
@@ -148,13 +151,15 @@ class FlinkRestManager(config: FlinkConfig, modelData: BaseModelData, mainClassN
   }
 
   override def cancel(processName: ProcessName, user: User): Future[Unit] = {
-    getFreshProcessStates(processName).flatMap { statuses =>
+    implicit val freshnessPolicy: DataFreshnessPolicy = DataFreshnessPolicy.Fresh
+    getProcessStates(processName).map(_.value).flatMap { statuses =>
       cancelEachMatchingJob(processName, None, statuses)
     }
   }
 
   override def cancel(processName: ProcessName, deploymentId: DeploymentId, user: User): Future[Unit] = {
-    getFreshProcessStates(processName).flatMap { statuses =>
+    implicit val freshnessPolicy: DataFreshnessPolicy = DataFreshnessPolicy.Fresh
+    getProcessStates(processName).map(_.value).flatMap { statuses =>
       cancelEachMatchingJob(processName, Some(deploymentId), statuses.filter(_.deploymentId.contains(deploymentId)))
     }
   }
@@ -167,13 +172,13 @@ class FlinkRestManager(config: FlinkConfig, modelData: BaseModelData, mainClassN
     statuses.filterNot(details => SimpleStateStatus.isFinalStatus(details.status)) match {
       case Nil =>
         logger.warn(
-          s"Trying to cancel ${processName.value}${deploymentId.map(" with id: " + _).getOrElse("")} which is not present or finished on Flink."
+          s"Trying to cancel $processName${deploymentId.map(" with id: " + _).getOrElse("")} which is not present or finished on Flink."
         )
         Future.successful(())
       case single :: Nil => cancelJob(single)
       case moreThanOne @ (_ :: _ :: _) =>
         logger.warn(
-          s"Found duplicate jobs of ${processName.value}${deploymentId.map(" with id: " + _).getOrElse("")}: $moreThanOne. Cancelling all in non terminal state."
+          s"Found duplicate jobs of $processName${deploymentId.map(" with id: " + _).getOrElse("")}: $moreThanOne. Cancelling all in non terminal state."
         )
         Future.sequence(moreThanOne.map(cancelJob)).map(_ => ())
     }
@@ -214,7 +219,7 @@ class FlinkRestManager(config: FlinkConfig, modelData: BaseModelData, mainClassN
       savepointPath: Option[String]
   ): Future[Option[ExternalDeploymentId]] = {
     logger.debug(s"Starting to deploy scenario: $processName with savepoint $savepointPath")
-    client.runProgram(jarFile, mainClass, args, savepointPath)
+    client.runProgram(modelJarProvider.getJobJar(), mainClass, args, savepointPath)
   }
 
   override protected def checkRequiredSlotsExceedAvailableSlots(

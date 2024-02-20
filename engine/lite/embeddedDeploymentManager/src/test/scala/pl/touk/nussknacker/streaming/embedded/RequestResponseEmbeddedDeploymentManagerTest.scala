@@ -5,8 +5,8 @@ import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigValueFactory.fromAnyRef
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
-import pl.touk.nussknacker.engine.ModelData
 import pl.touk.nussknacker.engine.api.ProcessVersion
+import pl.touk.nussknacker.engine.api.deployment.cache.ScenarioStateCachingConfig
 import pl.touk.nussknacker.engine.api.deployment.simple.SimpleStateStatus
 import pl.touk.nussknacker.engine.api.deployment.{
   DataFreshnessPolicy,
@@ -14,58 +14,63 @@ import pl.touk.nussknacker.engine.api.deployment.{
   DeploymentManager,
   ProcessingTypeDeploymentServiceStub
 }
-import pl.touk.nussknacker.engine.api.process.{EmptyProcessConfigCreator, ProcessName}
+import pl.touk.nussknacker.engine.api.process.ProcessName
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.deployment.{DeploymentData, User}
 import pl.touk.nussknacker.engine.embedded.EmbeddedDeploymentManagerProvider
+import pl.touk.nussknacker.engine.lite.components.requestresponse.RequestResponseComponentProvider
 import pl.touk.nussknacker.engine.lite.components.requestresponse.jsonschema.sinks.JsonRequestResponseSink.SinkRawEditorParamName
 import pl.touk.nussknacker.engine.spel.Implicits._
 import pl.touk.nussknacker.engine.testing.LocalModelData
-import pl.touk.nussknacker.test.{AvailablePortFinder, VeryPatientScalaFutures}
+import pl.touk.nussknacker.engine.{DeploymentManagerDependencies, ModelData}
+import pl.touk.nussknacker.test.{AvailablePortFinder, ValidatedValuesDetailedMessage, VeryPatientScalaFutures}
+import sttp.client3.testing.SttpBackendStub
 import sttp.client3.{HttpURLConnectionBackend, Identity, SttpBackend, UriContext, basicRequest}
 import sttp.model.StatusCode
 
-import scala.concurrent.Future
-
-class RequestResponseEmbeddedDeploymentManagerTest extends AnyFunSuite with Matchers with VeryPatientScalaFutures {
+class RequestResponseEmbeddedDeploymentManagerTest
+    extends AnyFunSuite
+    with Matchers
+    with VeryPatientScalaFutures
+    with ValidatedValuesDetailedMessage {
 
   protected implicit val freshnessPolicy: DataFreshnessPolicy = DataFreshnessPolicy.Fresh
 
   private implicit val backend: SttpBackend[Identity, Any] = HttpURLConnectionBackend()
 
   protected def prepareFixture(initiallyDeployedScenarios: List[DeployedScenarioData] = List.empty): FixtureParam = {
-
     val modelData = LocalModelData(
-      ConfigFactory
-        .empty()
-        .withValue("components.kafka.disabled", fromAnyRef(true))
-        .withValue("components.mockKafkaLite.disabled", fromAnyRef(true))
-        .withValue("components.mockKafkaFlink.disabled", fromAnyRef(true)),
-      new EmptyProcessConfigCreator
+      ConfigFactory.empty(),
+      RequestResponseComponentProvider.Components
     )
-    implicit val deploymentService: ProcessingTypeDeploymentServiceStub = new ProcessingTypeDeploymentServiceStub(
-      initiallyDeployedScenarios
+    val as: ActorSystem = ActorSystem(getClass.getSimpleName)
+    val dependencies = DeploymentManagerDependencies(
+      new ProcessingTypeDeploymentServiceStub(initiallyDeployedScenarios),
+      as.dispatcher,
+      as,
+      SttpBackendStub.asynchronousFuture
     )
-    implicit val as: ActorSystem                        = ActorSystem(getClass.getSimpleName)
-    implicit val dummyBackend: SttpBackend[Future, Any] = null
-    import as.dispatcher
     val port = AvailablePortFinder.findAvailablePorts(1).head
-    val manager = new EmbeddedDeploymentManagerProvider().createDeploymentManager(
-      modelData,
-      ConfigFactory
-        .empty()
-        .withValue("mode", fromAnyRef("request-response"))
-        .withValue("http.port", fromAnyRef(port))
-        .withValue("http.interface", fromAnyRef("localhost"))
-    )
+    val manager = new EmbeddedDeploymentManagerProvider()
+      .createDeploymentManager(
+        modelData,
+        dependencies,
+        ConfigFactory
+          .empty()
+          .withValue("mode", fromAnyRef("request-response"))
+          .withValue("http.port", fromAnyRef(port))
+          .withValue("http.interface", fromAnyRef("localhost")),
+        ScenarioStateCachingConfig.Default.cacheTTL
+      )
+      .validValue
     FixtureParam(manager, modelData, port)
   }
 
   sealed case class FixtureParam(deploymentManager: DeploymentManager, modelData: ModelData, port: Int) {
 
     def deployScenario(scenario: CanonicalProcess): Unit = {
-      val version = ProcessVersion.empty.copy(processName = ProcessName(scenario.id))
+      val version = ProcessVersion.empty.copy(processName = scenario.name)
       deploymentManager.deploy(version, DeploymentData.empty, scenario, None).futureValue
     }
 

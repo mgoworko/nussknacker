@@ -1,14 +1,12 @@
 package pl.touk.nussknacker.engine.api.definition
 
-import java.time.temporal.ChronoUnit
-
-import io.circe.generic.extras.ConfiguredJsonCodec
-import pl.touk.nussknacker.engine.api.editor.DualEditorMode
-import pl.touk.nussknacker.engine.api.CirceUtil._
-import io.circe.{Decoder, Encoder}
 import io.circe.generic.JsonCodec
-import io.circe.Json
+import io.circe.generic.extras.ConfiguredJsonCodec
+import io.circe.{Decoder, Encoder, Json}
+import pl.touk.nussknacker.engine.api.CirceUtil._
+import pl.touk.nussknacker.engine.api.editor.DualEditorMode
 
+import java.time.temporal.ChronoUnit
 import scala.util.Try
 
 @ConfiguredJsonCodec sealed trait ParameterEditor
@@ -76,7 +74,9 @@ case object CronParameterEditor extends SimpleParameterEditor
 @JsonCodec case class FixedValuesParameterEditor(possibleValues: List[FixedExpressionValue])
     extends SimpleParameterEditor
 
-@JsonCodec case class FixedExpressionValue(expression: String, label: String)
+@JsonCodec case class DictParameterEditor(
+    dictId: String // dictId must be present in ExpressionConfigDefinition.dictionaries
+) extends SimpleParameterEditor
 
 @JsonCodec case class DualParameterEditor(simpleEditor: SimpleParameterEditor, defaultMode: DualEditorMode)
     extends ParameterEditor

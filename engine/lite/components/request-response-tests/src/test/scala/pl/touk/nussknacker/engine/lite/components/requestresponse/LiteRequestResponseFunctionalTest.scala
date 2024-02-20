@@ -4,7 +4,7 @@ import akka.http.scaladsl.model.{HttpMethods, HttpRequest}
 import cats.data.Validated.{Invalid, Valid}
 import cats.data.{NonEmptyList, Validated, ValidatedNel}
 import io.circe.Json
-import io.circe.Json.{Null, fromInt, fromString, obj}
+import io.circe.Json.{Null, arr, fromInt, fromString, obj}
 import io.circe.syntax.EncoderOps
 import org.everit.json.schema.{NumberSchema, Schema, StringSchema}
 import org.scalatest.Inside.inside
@@ -58,7 +58,9 @@ class LiteRequestResponseFunctionalTest
 
   private val schemaStr = StringSchema.builder().build()
 
-  private val schemaInt = NumberSchema.builder().requiresNumber(true).minimum(1).maximum(16).build()
+  private val schemaNumber = NumberSchema.builder().requiresNumber(true).build()
+
+  private val schemaIntInRange = NumberSchema.builder().requiresNumber(true).minimum(1).maximum(16).build()
 
   private val schemaObjNull = JsonSchemaBuilder.parseSchema(
     s"""{"type":"object","properties": {"$ObjectFieldName": $schemaNull}, "additionalProperties": false}"""
@@ -257,9 +259,9 @@ class LiteRequestResponseFunctionalTest
     val testData = Table(
       ("config", "result"),
       // Primitive integer validations
-      (config(fromInt(1), schemaInt, schemaInt), Valid(fromInt(1))),
-      (conf(schemaInt, 1), Valid(fromInt(1))),
-      (conf(schemaInt, 100), invalidRange("actual value: '100' should be between 1 and 16")),
+      (config(fromInt(1), schemaIntInRange, schemaIntInRange), Valid(fromInt(1))),
+      (conf(schemaIntInRange, 1), Valid(fromInt(1))),
+      (conf(schemaIntInRange, 100), invalidRange("actual value: '100' should be between 1 and 16")),
     )
 
     forAll(testData) { (config: ScenarioConfig, expected: Validated[_, Json]) =>
@@ -316,21 +318,9 @@ class LiteRequestResponseFunctionalTest
         config(sampleObjWithAdds, schemaObjUnionNullString(), schemaObjUnionNullString(true)),
         "#: extraneous key [field2] is not permitted"
       ),
-
+      (config(fromInt(Int.MaxValue), schemaIntInRange, schemaNumber), s"#: ${Int.MaxValue} is not less or equal to 16"),
       // Errors at sink
-      (
-        config(sampleObjWithAdds, schemaObjString(true), schemaObjStr),
-        s"Not expected field with name: field2 for schema: $schemaObjStr."
-      ),
-      (
-        config(obj(), schemaObjString(), schemaObjString(), Map(ObjectFieldName -> InputField)),
-        s"Not expected type: Null for field: 'field' with schema: $schemaStr."
-      ),
-      (
-        config(sampleObjWithAdds, schemaObjUnionNullString(true), schemaObjUnionNullString()),
-        s"Not expected field with name: field2 for schema: ${schemaObjUnionNullString()}."
-      ),
-      (config(fromInt(Int.MaxValue), schemaInt, schemaInt), s"#: ${Int.MaxValue} is not less or equal to 16"),
+      (config(fromInt(Int.MaxValue), schemaNumber, schemaIntInRange), s"#: ${Int.MaxValue} is not less or equal to 16"),
     )
 
     forAll(testData) { (config: ScenarioConfig, expected: String) =>
@@ -399,6 +389,77 @@ class LiteRequestResponseFunctionalTest
 
       result shouldBe expected
     }
+  }
+
+  test("validate nested json schema and match to it fitting expression") {
+    val nestedSchema = JsonSchemaBuilder.parseSchema("""{
+            |    "properties": {
+            |        "books": {
+            |            "items": {
+            |                "properties": {
+            |                    "title": {
+            |                        "type": "string"
+            |                    },
+            |                    "additionalInfo": {
+            |                        "properties": {
+            |                            "coverColor": {
+            |                                "type": "string"
+            |                            }
+            |                        },
+            |                        "type": "object"
+            |                    }
+            |                },
+            |                "type": "object"
+            |            },
+            |            "type": "array"
+            |        }
+            |    },
+            |    "type": "object"
+            |}""".stripMargin)
+
+    val sinkFields = Map(
+      "books" ->
+        """
+              |{
+              |   {
+              |       "title": "Low-code with NU",
+              |       "additionalInfo": {
+              |            "coverColor": "Red"
+              |        }
+              |   }
+              |}
+            |""".stripMargin
+    )
+    val expectedResult = Valid(
+      obj(
+        "books" ->
+          arr(
+            obj("title" -> fromString("Low-code with NU"), "additionalInfo" -> obj("coverColor" -> fromString("Red")))
+          )
+      )
+    )
+
+    val cfg = config(sampleObjWithAdds, schemaObjString(true), nestedSchema)
+    val sinkParams = (Map(
+      SinkRawEditorParamName          -> "false",
+      SinkValidationModeParameterName -> s"'${cfg.validationModeName}'",
+    ) ++ sinkFields).mapValuesNow(Expression.spel)
+    val scenario = ScenarioBuilder
+      .requestResponse("test")
+      .additionalFields(properties =
+        Map(
+          "inputSchema"  -> cfg.sourceSchema.toString,
+          "outputSchema" -> cfg.outputSchema.toString
+        )
+      )
+      .source("input", "request")
+      .emptySink(sinkName, "response", sinkParams.toList: _*)
+    val result = runner.runWithRequests(scenario) { invoker =>
+      invoker(HttpRequest(HttpMethods.POST, entity = cfg.input.asJson.spaces2)).rightValue
+    }
+
+    result shouldBe expectedResult
+
   }
 
   private def runWithResults(config: ScenarioConfig): ValidatedNel[ProcessCompilationError, Json] = {

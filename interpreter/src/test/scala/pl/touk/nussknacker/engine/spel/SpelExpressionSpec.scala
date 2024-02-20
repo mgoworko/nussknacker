@@ -3,17 +3,18 @@ package pl.touk.nussknacker.engine.spel
 import cats.data.Validated.{Invalid, Valid}
 import cats.data.{NonEmptyList, Validated, ValidatedNel}
 import cats.implicits.catsSyntaxValidatedId
+import org.apache.avro.Schema
 import org.apache.avro.generic.GenericData
 import org.scalacheck.Gen
 import org.scalatest.Inside.inside
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.prop.TableDrivenPropertyChecks._
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks
-import pl.touk.nussknacker.engine.TypeDefinitionSet
 import pl.touk.nussknacker.engine.api.context.ValidationContext
 import pl.touk.nussknacker.engine.api.dict.embedded.EmbeddedDictDefinition
 import pl.touk.nussknacker.engine.api.dict.{DictDefinition, DictInstance}
-import pl.touk.nussknacker.engine.api.expression.{Expression, TypedExpression}
+import pl.touk.nussknacker.engine.api.expression.{Expression => CompiledExpression, TypedExpression}
 import pl.touk.nussknacker.engine.api.generics.{
   ExpressionParseError,
   GenericFunctionTypingError,
@@ -21,20 +22,10 @@ import pl.touk.nussknacker.engine.api.generics.{
   TypingFunction
 }
 import pl.touk.nussknacker.engine.api.process.ExpressionConfig._
-import pl.touk.nussknacker.engine.api.process.LanguageConfiguration
 import pl.touk.nussknacker.engine.api.typed.TypedMap
-import pl.touk.nussknacker.engine.api.typed.typing.{
-  KnownTypingResult,
-  SingleTypingResult,
-  Typed,
-  TypedNull,
-  TypedObjectTypingResult,
-  TypedUnion,
-  TypingResult
-}
+import pl.touk.nussknacker.engine.api.typed.typing.{Typed, _}
 import pl.touk.nussknacker.engine.api.{Context, NodeId, SpelExpressionExcludeList}
-import pl.touk.nussknacker.engine.definition.ProcessDefinitionExtractor.ExpressionDefinition
-import pl.touk.nussknacker.engine.definition.TypeInfos.ClazzDefinition
+import pl.touk.nussknacker.engine.definition.clazz.{ClassDefinitionSet, JavaClassWithVarargs}
 import pl.touk.nussknacker.engine.dict.SimpleDictRegistry
 import pl.touk.nussknacker.engine.spel.SpelExpressionParseError.IllegalOperationError.{
   InvalidMethodReference,
@@ -45,17 +36,10 @@ import pl.touk.nussknacker.engine.spel.SpelExpressionParseError.MissingObjectErr
   UnknownClassError,
   UnknownMethodError
 }
-import pl.touk.nussknacker.engine.spel.SpelExpressionParseError.OperatorError.{
-  DivisionByZeroError,
-  ModuloZeroError,
-  OperatorMismatchTypeError,
-  OperatorNonNumericError,
-  OperatorNotComparableError
-}
+import pl.touk.nussknacker.engine.spel.SpelExpressionParseError.OperatorError._
 import pl.touk.nussknacker.engine.spel.SpelExpressionParseError.{ArgumentTypeError, ExpressionTypeError}
 import pl.touk.nussknacker.engine.spel.SpelExpressionParser.{Flavour, Standard}
-import pl.touk.nussknacker.engine.testing.ProcessDefinitionBuilder
-import pl.touk.nussknacker.engine.types.{GeneratedAvroClass, JavaClassWithVarargs}
+import pl.touk.nussknacker.engine.testing.ModelDefinitionBuilder
 import pl.touk.nussknacker.test.ValidatedValuesDetailedMessage
 
 import java.math.{BigDecimal, BigInteger}
@@ -63,7 +47,7 @@ import java.nio.charset.Charset
 import java.time.chrono.ChronoLocalDate
 import java.time.{LocalDate, LocalDateTime}
 import java.util
-import java.util.{Collections, Currency, Locale, UUID}
+import java.util.{Collections, Currency, Locale, Optional, UUID}
 import scala.annotation.varargs
 import scala.jdk.CollectionConverters._
 import scala.language.implicitConversions
@@ -72,16 +56,14 @@ import scala.reflect.runtime.universe._
 class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesDetailedMessage {
 
   private implicit class ValidatedExpressionOps[E](validated: Validated[E, TypedExpression]) {
-    def validExpression: Expression = validated.validValue.expression
+    def validExpression: CompiledExpression = validated.validValue.expression
   }
 
-  private implicit class EvaluateSync(expression: Expression) {
+  private implicit class EvaluateSync(expression: CompiledExpression) {
     def evaluateSync[T](ctx: Context = ctx): T = expression.evaluate(ctx, Map.empty)
   }
 
   private implicit val nid: NodeId = NodeId("")
-
-  private implicit val classLoader: ClassLoader = getClass.getClassLoader
 
   private val bigValue = BigDecimal.valueOf(4187338076L)
 
@@ -171,7 +153,7 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
       dynamicPropertyAccessAllowed: Boolean = defaultDynamicPropertyAccessAllowed
   ) = {
     val imports = List(SampleValue.getClass.getPackage.getName)
-    val expressionConfig = ProcessDefinitionBuilder.empty.expressionConfig.copy(
+    val expressionConfig = ModelDefinitionBuilder.emptyExpressionConfig.copy(
       globalImports = imports,
       strictMethodsChecking = strictMethodsChecking,
       staticMethodInvocationsChecking = staticMethodInvocationsChecking,
@@ -185,7 +167,7 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
       new SimpleDictRegistry(dictionaries),
       enableSpelForceCompile = true,
       flavour,
-      typeDefinitionSetWithCustomClasses(globalVariableTypes)
+      classDefinitionSetWithCustomClasses(globalVariableTypes)
     )
   }
 
@@ -201,11 +183,11 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
     )
   }
 
-  private def typeDefinitionSetWithCustomClasses(globalVariableTypes: Seq[TypingResult]): TypeDefinitionSet = {
+  private def classDefinitionSetWithCustomClasses(globalVariableTypes: Seq[TypingResult]): ClassDefinitionSet = {
     val typesFromGlobalVariables = globalVariableTypes
       .flatMap(_.asInstanceOf[KnownTypingResult] match {
-        case single: SingleTypingResult => Set(single)
-        case TypedUnion(types)          => types
+        case single: SingleTypingResult => Seq(single)
+        case union: TypedUnion          => union.possibleTypes.toList
       })
       .map(_.objType.klass)
     val customClasses = Seq(
@@ -221,7 +203,7 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
       classOf[SampleValue],
       Class.forName("pl.touk.nussknacker.engine.spel.SampleGlobalObject")
     )
-    TypeDefinitionSet.forClasses(typesFromGlobalVariables ++ customClasses: _*)
+    ClassDefinitionSet.forClasses(typesFromGlobalVariables ++ customClasses: _*)
   }
 
   test("parsing first selection on array") {
@@ -500,10 +482,59 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
 
   test("access list elements by index") {
     parse[String]("#obj.children[0].id").validExpression.evaluateSync[String](ctx) shouldEqual "3"
-    parse[String]("#mapValue['foo']", dynamicPropertyAccessAllowed = true).validExpression
-      .evaluateSync[String](ctx) shouldEqual "bar"
     parse[Int]("#obj.children[0].id") shouldBe Symbol("invalid")
+  }
 
+  test("access fields with the same name as a no parameter method in record") {
+    parse[String]("{getClass: 'str'}.getClass").validExpression.evaluateSync[String](ctx) shouldEqual "str"
+    parse[String]("{isEmpty: 'str'}.isEmpty").validExpression.evaluateSync[String](ctx) shouldEqual "str"
+  }
+
+  test("access fields with the name of method without getter prefix in record") {
+    // Reflective accessor would normally try to find methods with added getter prefixes "is" or "get" so that ".class"
+    // would call ".getClass()"
+    parse[String]("{class: 'str'}.class").validExpression.evaluateSync[String](ctx) shouldEqual "str"
+    parse[String]("{empty: 'str'}.empty").validExpression.evaluateSync[String](ctx) shouldEqual "str"
+  }
+
+  test("access record elements by index") {
+    val ctxWithVal = ctx.withVariable("stringKey", "string")
+    val testRecordExpr: String =
+      "{int: 1, string: 'stringVal', boolean: true, 'null': null, nestedRecord: {nestedRecordKey: 2}, nestedList: {1,2,3}}"
+
+    parse[String](s"$testRecordExpr['string']").validExpression.evaluateSync[String](ctx) shouldBe "stringVal"
+    parse[String](s"$testRecordExpr[string]").validExpression.evaluateSync[String](ctx) shouldBe "stringVal"
+    parse[String](s"$testRecordExpr['str' + 'ing']").validExpression.evaluateSync[String](ctx) shouldBe "stringVal"
+    parse[String](s"$testRecordExpr[#stringKey]", ctxWithVal).validExpression
+      .evaluateSync[String](ctxWithVal) shouldBe "stringVal"
+
+    parse[Any](s"$testRecordExpr['nestedRecord']").validExpression
+      .evaluateSync[Any](ctx) shouldBe Collections.singletonMap("nestedRecordKey", 2)
+    parse[Any](s"$testRecordExpr[nestedRecord]").validExpression
+      .evaluateSync[Any](ctx) shouldBe Collections.singletonMap("nestedRecordKey", 2)
+
+    parse[Int](s"$testRecordExpr[nestedRecord][nestedRecordKey]").validExpression.evaluateSync[Int](ctx) shouldBe 2
+    parse[Int](s"$testRecordExpr['nestedRecord']['nestedRecordKey']").validExpression.evaluateSync[Int](ctx) shouldBe 2
+
+    parse[Any](s"$testRecordExpr[nestedList]").validExpression
+      .evaluateSync[Any](ctx) shouldBe util.Arrays.asList(1, 2, 3)
+    parse[Any](s"$testRecordExpr['nestedList']").validExpression
+      .evaluateSync[Any](ctx) shouldBe util.Arrays.asList(1, 2, 3)
+  }
+
+  test("should return no property present error for record non-present element when enabled") {
+    inside(parse[Any]("{key: 1}[nonPresentField]")) {
+      case Invalid(l: NonEmptyList[ExpressionParseError])
+          if l.toList.exists(error => error.message.startsWith("There is no property 'nonPresentField' in type:")) =>
+    }
+    inside(parse[Any]("{key: 1}['nonPresentField']")) { case Invalid(NonEmptyList(error: ExpressionParseError, Nil)) =>
+      error.message should startWith("There is no property 'nonPresentField' in type:")
+    }
+  }
+
+  test("should return null for dynamic property access for record non-present element when enabled") {
+    parse[Any](s"{key: 1}['nonPresentField']", dynamicPropertyAccessAllowed = true).validExpression
+      .evaluateSync[Any](ctx) == null shouldBe true
   }
 
   test("filter by list predicates") {
@@ -566,10 +597,10 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
     val validationCtx = ValidationContext.empty
       .withVariable(
         "map",
-        TypedObjectTypingResult(
+        Typed.record(
           Map(
             "foo"    -> Typed[Int],
-            "nested" -> TypedObjectTypingResult(Map("bar" -> Typed[Int]))
+            "nested" -> Typed.record(Map("bar" -> Typed[Int]))
           )
         ),
         paramName = None
@@ -608,18 +639,18 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
   }
 
   test("check property if is defined even if class has get method - avro generic record") {
-    val record = new GenericData.Record(GeneratedAvroClass.SCHEMA$)
+    val schema = new Schema.Parser().parse("""{
+        |  "type": "record",
+        |  "name": "Foo",
+        |  "fields": [
+        |    { "name": "text", "type": "string" }
+        |  ]
+        |}
+      """.stripMargin)
+    val record = new GenericData.Record(schema)
     record.put("text", "foo")
     val withObjVar = ctx.withVariable("obj", record)
-
     parse[String]("#obj.text", withObjVar).validExpression.evaluateSync[String](withObjVar) shouldEqual "foo"
-  }
-
-  test("exact check properties in generated avro classes") {
-    val withObjVar = ctx.withVariable("obj", GeneratedAvroClass.newBuilder().setText("123").build())
-
-    parse[Boolean]("#obj.notExistingProperty == 123", withObjVar) shouldBe Symbol("invalid")
-    parse[Boolean]("#obj.getText == '123'", withObjVar).validExpression.evaluateSync[Boolean](withObjVar) shouldBe true
   }
 
   test("allow access to statics") {
@@ -680,10 +711,20 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
   test("validate ternary operator") {
     parse[Long]("'d'? 3 : 4", ctx) should not be Symbol("valid")
     parse[String]("1 > 2 ? 12 : 23", ctx) should not be Symbol("valid")
-    parse[Long]("1 > 2 ? 12 : 23", ctx) shouldBe Symbol("valid")
-    parse[Number]("1 > 2 ? 12 : 23.0", ctx) shouldBe Symbol("valid")
-    parse[String]("1 > 2 ? 'ss' : 'dd'", ctx) shouldBe Symbol("valid")
-    parse[Any]("1 > 2 ? '123' : 123", ctx) shouldBe Symbol("invalid")
+    parse[Long]("1 > 2 ? 12 : 23", ctx).validValue.returnType shouldBe Typed[Integer]
+    parse[Number]("1 > 2 ? 12 : 23.0", ctx).validValue.returnType shouldBe Typed[Number]
+    parse[String]("1 > 2 ? 'ss' : 'dd'", ctx).validValue.returnType shouldBe Typed[String]
+    parse[Any]("1 > 2 ? '123' : 123", ctx).validValue.returnType shouldBe Unknown
+    parse[Any]("1 > 2 ? {foo: 1} : {bar: 1}", ctx).validValue.returnType shouldBe Typed.record(
+      Map(
+        "foo" -> Typed.fromInstance(1),
+        "bar" -> Typed.fromInstance(1),
+      )
+    )
+    parse[Any](
+      "1 > 2 ? {foo: 1} : #processHelper.stringOnStringMap",
+      ctxWithGlobal
+    ).validValue.returnType shouldBe Typed.genericTypeClass(classOf[java.util.Map[_, _]], List(Typed[String], Unknown))
   }
 
   test("validate selection for inline list") {
@@ -797,7 +838,7 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
     val ctxWithMap = ValidationContext.empty
       .withVariable(
         "input",
-        TypedObjectTypingResult(Map("str" -> Typed[String], "lon" -> Typed[Long])),
+        Typed.record(Map("str" -> Typed[String], "lon" -> Typed[Long])),
         paramName = None
       )
       .toOption
@@ -812,7 +853,7 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
 
   test("be able to convert between primitive types") {
     val ctxWithMap = ValidationContext.empty
-      .withVariable("input", TypedObjectTypingResult(Map("int" -> Typed[Int])), paramName = None)
+      .withVariable("input", Typed.record(Map("int" -> Typed[Int])), paramName = None)
       .toOption
       .get
 
@@ -825,7 +866,7 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
     val valCtxWithMap = ValidationContext.empty
       .withVariable(
         "input",
-        TypedObjectTypingResult(Map("str" -> Typed[String], "lon" -> Typed[Long])),
+        Typed.record(Map("str" -> Typed[String], "lon" -> Typed[Long])),
         paramName = None
       )
       .toOption
@@ -851,7 +892,7 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
     val ctxWithMap = ValidationContext.empty
       .withVariable(
         "input",
-        Typed(TypedObjectTypingResult(Map("str" -> Typed[String])), TypedObjectTypingResult(Map("lon" -> Typed[Long]))),
+        Typed(Typed.record(Map("str" -> Typed[String])), Typed.record(Map("lon" -> Typed[Long]))),
         paramName = None
       )
       .toOption
@@ -925,6 +966,17 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
     parse[Boolean]("'123' != null", ctx) shouldBe Symbol("valid")
 
     parse[Boolean]("123 == 123123123123L", ctx) shouldBe Symbol("valid")
+    parse[Boolean]("{1, 2} == {'a', 'b'}", ctx) shouldBe Symbol("invalid")
+    // Number's have common Number supertype
+    parse[Boolean]("{1, 2} == {1.0, 2.0}", ctx) shouldBe Symbol("valid")
+  }
+
+  test("compare records with different fields in equality") {
+    parse[Boolean]("{foo: null} == {:}", ctx) shouldBe Symbol("valid")
+    parse[Boolean](
+      "{key1: 'value1', key2: 'value2'} == #processHelper.stringOnStringMap",
+      ctxWithGlobal
+    ).validExpression.evaluateSync[Boolean](ctxWithGlobal) shouldBe true
   }
 
   test("precise type parsing in two operand operators") {
@@ -1082,6 +1134,9 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
     parse[LocalDate]("'2007-12-03'", ctx).validExpression.evaluateSync[Locale](ctx) shouldBe LocalDate.parse(
       "2007-12-03"
     )
+    parse[ChronoLocalDate]("'2007-12-03'", ctx).validExpression.evaluateSync[Locale](ctx) shouldBe LocalDate.parse(
+      "2007-12-03"
+    )
   }
 
   test("shouldn't allow invalid spel type conversions") {
@@ -1160,13 +1215,34 @@ class SpelExpressionSpec extends AnyFunSuite with Matchers with ValidatedValuesD
   test("should check map values") {
     val parser = expressionParser()
     val expected = Typed.genericTypeClass[java.util.Map[_, _]](
-      List(Typed[String], TypedObjectTypingResult(Map("additional" -> Typed[String])))
+      List(Typed[String], Typed.record(Map("additional" -> Typed[String])))
     )
     inside(parser.parse("""{"aField": {"additional": 1}}""", ValidationContext.empty, expected)) {
       case Invalid(NonEmptyList(e: ExpressionTypeError, Nil)) =>
         e.expected shouldBe expected
     }
     parser.parse("""{"aField": {"additional": "str"}}""", ValidationContext.empty, expected) shouldBe Symbol("valid")
+  }
+
+  test("should use generic parameters in method return types") {
+    forAll(
+      Table(
+        ("expression", "expectedResultType"),
+        ("{foo: 1, bar: 2}.get('foo')", Typed[Int]),
+        ("{foo: 1, bar: 'string'}.get('foo')", Unknown),
+        ("{foo: 1, bar: 2}.getOrDefault('foo', 1)", Typed[Int]),
+        ("{foo: 1, bar: 2}.values", Typed.fromDetailedType[java.util.Collection[Integer]]),
+        ("{foo: 1, bar: 2}.keySet", Typed.fromDetailedType[java.util.Set[String]]),
+        ("{1, 2}.get(0)", Typed[Int]),
+        ("#optional.get", Typed[Int]),
+        ("#optional.orElse(123)", Typed[Int]),
+      )
+    ) { (expression, expectedResultType) =>
+      val validationContext = ValidationContext.empty
+        .withVariable("optional", Typed.fromDetailedType[Optional[Integer]], None)
+        .validValue
+      parseV[Any](expression, validationContext).validValue.typingInfo.typingResult shouldBe expectedResultType
+    }
   }
 
 }

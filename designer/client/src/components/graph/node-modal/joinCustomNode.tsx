@@ -2,18 +2,16 @@ import { NodeType, NodeValidationError, ProcessDefinitionData, UIParameter } fro
 import ProcessUtils from "../../../common/ProcessUtils";
 import { useTestResults } from "./TestResultsWrapper";
 import React, { useMemo } from "react";
-import { NodeTableBody } from "./NodeDetailsContent/NodeTable";
 import { IdField } from "./IdField";
 import { NodeField } from "./NodeField";
 import { FieldType } from "./editors/field/Field";
-import { errorValidator } from "./editors/Validators";
 import NodeUtils from "../NodeUtils";
 import BranchParameters from "./BranchParameters";
 import { ParameterExpressionField } from "./ParameterExpressionField";
 import { DescriptionField } from "./DescriptionField";
 
 export function JoinCustomNode({
-    fieldErrors,
+    errors,
     findAvailableVariables,
     isEditMode,
     node,
@@ -24,7 +22,7 @@ export function JoinCustomNode({
     showSwitch,
     showValidation,
 }: {
-    fieldErrors?: NodeValidationError[];
+    errors: NodeValidationError[];
     findAvailableVariables?: ReturnType<typeof ProcessUtils.findAvailableVariables>;
     isEditMode?: boolean;
     node: NodeType;
@@ -37,19 +35,18 @@ export function JoinCustomNode({
 }): JSX.Element {
     const testResultsState = useTestResults();
     const hasOutputVar = useMemo(
-        (): boolean =>
-            !!ProcessUtils.findNodeObjectTypeDefinition(node, processDefinitionData.processDefinition)?.returnType || !!node.outputVar,
-        [node, processDefinitionData.processDefinition],
+        (): boolean => !!ProcessUtils.extractComponentDefinition(node, processDefinitionData.components)?.returnType || !!node.outputVar,
+        [node, processDefinitionData.components],
     );
     return (
-        <NodeTableBody>
+        <>
             <IdField
                 node={node}
                 isEditMode={isEditMode}
                 showValidation={showValidation}
                 renderFieldLabel={renderFieldLabel}
                 setProperty={setProperty}
-                errors={fieldErrors}
+                errors={errors}
             />
             {hasOutputVar && (
                 <NodeField
@@ -60,8 +57,8 @@ export function JoinCustomNode({
                     setProperty={setProperty}
                     fieldType={FieldType.input}
                     fieldLabel={"Output variable name"}
-                    fieldProperty={"outputVar"}
-                    validators={[errorValidator(fieldErrors || [], "outputVar")]}
+                    fieldName={"outputVar"}
+                    errors={errors}
                 />
             )}
             {NodeUtils.nodeIsJoin(node) && (
@@ -70,7 +67,7 @@ export function JoinCustomNode({
                     showValidation={showValidation}
                     showSwitch={showSwitch}
                     isEditMode={isEditMode}
-                    errors={fieldErrors || []}
+                    errors={errors || []}
                     parameterDefinitions={parameterDefinitions}
                     setNodeDataAt={setProperty}
                     testResultsToShow={testResultsState.testResultsToShow}
@@ -84,7 +81,7 @@ export function JoinCustomNode({
                             showSwitch={showSwitch}
                             findAvailableVariables={findAvailableVariables}
                             parameterDefinitions={parameterDefinitions}
-                            fieldErrors={fieldErrors}
+                            errors={errors}
                             node={node}
                             isEditMode={isEditMode}
                             showValidation={showValidation}
@@ -102,7 +99,8 @@ export function JoinCustomNode({
                 showValidation={showValidation}
                 renderFieldLabel={renderFieldLabel}
                 setProperty={setProperty}
+                errors={errors}
             />
-        </NodeTableBody>
+        </>
     );
 }

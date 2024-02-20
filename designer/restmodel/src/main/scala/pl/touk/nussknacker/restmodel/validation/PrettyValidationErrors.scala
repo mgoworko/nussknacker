@@ -3,15 +3,9 @@ package pl.touk.nussknacker.restmodel.validation
 import org.apache.commons.lang3.StringUtils
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError._
 import pl.touk.nussknacker.engine.api.context.{ParameterValidationError, ProcessCompilationError}
-import pl.touk.nussknacker.engine.api.process.ProcessingType
 import pl.touk.nussknacker.engine.api.util.ReflectUtils
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
-import pl.touk.nussknacker.engine.graph.node.{
-  InitialValueFieldName,
-  InputModeFieldName,
-  TypFieldName,
-  qualifiedParamFieldName
-}
+import pl.touk.nussknacker.engine.graph.node._
 import pl.touk.nussknacker.restmodel.validation.ValidationResults.{NodeValidationError, NodeValidationErrorType}
 
 object PrettyValidationErrors {
@@ -61,7 +55,7 @@ object PrettyValidationErrors {
         node(
           message,
           description,
-          fieldName = Some(CanonicalProcess.IdFieldName),
+          fieldName = Some(CanonicalProcess.NameFieldName),
         )
       case SpecificDataValidationError(field, message) => node(message, message, fieldName = Some(field))
       case NonUniqueEdgeType(etype, nodeId) =>
@@ -76,10 +70,22 @@ object PrettyValidationErrors {
           s"Node $nodeId has duplicate outgoing edges to: $target, it cannot be saved properly",
           errorType = NodeValidationErrorType.SaveNotAllowed
         )
-      case LooseNode(nodeId) =>
+      case LooseNode(nodeIds) =>
+        val (message, description) = nodeIds.toList match {
+          case nodeId :: Nil =>
+            (
+              "Loose node",
+              s"Node $nodeId is not connected to source, it cannot be saved properly"
+            )
+          case _ =>
+            (
+              "Loose nodes",
+              s"Nodes ${nodeIds.mkString(", ")} are not connected to source, it cannot be saved properly"
+            )
+        }
         node(
-          "Loose node",
-          s"Node $nodeId is not connected to source, it cannot be saved properly",
+          message,
+          description,
           errorType = NodeValidationErrorType.SaveNotAllowed
         )
       case DisabledNode(nodeId) =>
@@ -115,13 +121,13 @@ object PrettyValidationErrors {
         )
       case OverwrittenVariable(varName, _, paramName) =>
         node(
-          s"Variable output name '$varName' is already defined.",
+          s"Variable name '$varName' is already defined.",
           "You cannot overwrite variables",
           fieldName = paramName
         )
-      case InvalidVariableOutputName(varName, _, paramName) =>
+      case InvalidVariableName(varName, _, paramName) =>
         node(
-          s"Variable output name '$varName' is not a valid identifier (only letters, numbers or '_', cannot be empty)",
+          s"Variable name '$varName' is not a valid identifier (only letters, numbers or '_', cannot be empty)",
           "Please use only letters, numbers or '_', also identifier cannot be empty.",
           fieldName = paramName
         )
@@ -139,37 +145,43 @@ object PrettyValidationErrors {
       case UnresolvedFragment(id) => node("Unresolved fragment", s"fragment $id encountered, this should not happen")
       case FragmentOutputNotDefined(id, _) => node(s"Output $id not defined", "Please check fragment definition")
       case UnknownFragmentOutput(id, _)    => node(s"Unknown fragment output $id", "Please check fragment definition")
-      case DisablingManyOutputsFragment(id, _) =>
-        node(s"Cannot disable fragment $id. Has many outputs", "Please check fragment definition")
-      case DisablingNoOutputsFragment(id) =>
-        node(s"Cannot disable fragment $id. Hasn't outputs", "Please check fragment definition")
+      case DisablingManyOutputsFragment(_) =>
+        node(s"Cannot disable fragment with multiple outputs", "Please check fragment definition")
+      case DisablingNoOutputsFragment(_) =>
+        node(s"Cannot disable fragment with no outputs", "Please check fragment definition")
       case MissingRequiredProperty(fieldName, label, _) => missingRequiredProperty(typ, fieldName, label)
       case UnknownProperty(propertyName, _)             => unknownProperty(typ, propertyName)
       case InvalidPropertyFixedValue(fieldName, label, value, values, _) =>
         invalidPropertyFixedValue(typ, fieldName, label, value, values)
       case CustomNodeError(_, message, paramName) =>
         NodeValidationError(typ, message, message, paramName, NodeValidationErrorType.SaveAllowed)
-      case MultipleOutputsForName(name, _) =>
+      case e: DuplicateFragmentOutputNames =>
         node(
-          s"There is more than one output with '$name' name defined in the fragment, currently this is not allowed",
+          s"Fragment output name '${e.duplicatedVarName}' has to be unique",
           "Please check fragment definition"
+        )
+      case DuplicateFragmentInputParameter(paramName, _) =>
+        node(
+          s"Parameter name '$paramName' has to be unique",
+          "Parameter name not unique",
+          fieldName = Some(qualifiedParamFieldName(paramName = paramName, subFieldName = Some(ParameterNameFieldName)))
         )
       case InitialValueNotPresentInPossibleValues(paramName, _) =>
         node(
           s"The initial value provided for parameter '$paramName' is not present in the parameter's possible values list",
-          "Please check fragment definition",
+          "Please check component definition",
           fieldName = Some(qualifiedParamFieldName(paramName = paramName, subFieldName = Some(InitialValueFieldName)))
         )
       case UnsupportedFixedValuesType(paramName, typ, _) =>
         node(
           s"Fixed values list can only be be provided for type String or Boolean, found: $typ",
-          "Please check fragment definition",
+          "Please check component definition",
           fieldName = Some(qualifiedParamFieldName(paramName = paramName, subFieldName = Some(TypFieldName)))
         )
       case RequireValueFromEmptyFixedList(paramName, _) =>
         node(
           s"Required parameter '$paramName' cannot be a member of an empty fixed list",
-          "Please check fragment definition",
+          "Please check component definition",
           fieldName = Some(qualifiedParamFieldName(paramName = paramName, subFieldName = Some(InputModeFieldName)))
         )
       case ExpressionParserCompilationErrorInFragmentDefinition(message, _, paramName, subFieldName, originalExpr) =>
@@ -178,17 +190,44 @@ object PrettyValidationErrors {
           s"There is a problem with expression: $originalExpr",
           fieldName = Some(qualifiedParamFieldName(paramName = paramName, subFieldName = subFieldName))
         )
+      case InvalidValidationExpression(message, _, paramName, originalExpr) =>
+        node(
+          s"Invalid validation expression: $message",
+          s"There is a problem with validation expression: $originalExpr",
+          fieldName =
+            Some(qualifiedParamFieldName(paramName = paramName, subFieldName = Some(ValidationExpressionFieldName)))
+        )
+      case DictNotDeclared(dictId, _, paramName) =>
+        node(
+          s"Dictionary not declared: $dictId",
+          s"Dictionary not declared: $dictId",
+          fieldName = Some(paramName)
+        )
+      case DictEntryWithKeyNotExists(dictId, key, possibleKeys, _, paramName) =>
+        node(
+          s"Dictionary $dictId doesn't contain entry with key: $key",
+          s"Dictionary $dictId possible keys: $possibleKeys",
+          fieldName = Some(paramName)
+        )
+      case DictEntryWithLabelNotExists(dictId, label, possibleLabels, _, paramName) =>
+        node(
+          s"Dictionary $dictId doesn't contain entry with label: $label",
+          s"Dictionary $dictId possible labels: $possibleLabels",
+          fieldName = Some(paramName)
+        )
+      case DictLabelByKeyResolutionFailed(dictId, key, _, paramName) =>
+        node(
+          s"Failed to resolve label for key: $key in dict: $dictId",
+          s"Dict registry doesn't support fetching of label for dictId: $dictId",
+          fieldName = Some(paramName)
+        )
+      case KeyWithLabelExpressionParsingError(keyWithLabel, message, paramName, _) =>
+        node(
+          s"Error while parsing KeyWithLabel expression: $keyWithLabel",
+          message,
+          fieldName = Some(paramName)
+        )
     }
-  }
-
-  def noValidatorKnown(typ: ProcessingType): NodeValidationError = {
-    NodeValidationError(
-      typ,
-      s"No validator available for $typ",
-      "No validator for scenario type - please check configuration",
-      fieldName = None,
-      errorType = NodeValidationErrorType.RenderNotAllowed
-    )
   }
 
   private def unknownProperty(typ: String, propertyName: String): NodeValidationError =
@@ -237,11 +276,11 @@ object PrettyValidationErrors {
 
   private def mapIdErrorToNodeError(error: IdError) = {
     val validatedObjectType = error match {
-      case ScenarioIdError(_, _, isFragment) => if (isFragment) "Fragment" else "Scenario"
-      case NodeIdValidationError(_, _)       => "Node"
+      case ScenarioNameError(_, _, isFragment) => if (isFragment) "Fragment" else "Scenario"
+      case NodeIdValidationError(_, _)         => "Node"
     }
     val errorSeverity = error match {
-      case ScenarioIdError(_, _, _) => NodeValidationErrorType.SaveAllowed
+      case ScenarioNameError(_, _, _) => NodeValidationErrorType.SaveAllowed
       case NodeIdValidationError(errorType, _) =>
         errorType match {
           case ProcessCompilationError.EmptyValue | IllegalCharactersId(_) => NodeValidationErrorType.RenderNotAllowed
@@ -249,7 +288,7 @@ object PrettyValidationErrors {
         }
     }
     val fieldName = error match {
-      case ScenarioIdError(_, _, _)    => CanonicalProcess.IdFieldName
+      case ScenarioNameError(_, _, _)  => CanonicalProcess.NameFieldName
       case NodeIdValidationError(_, _) => pl.touk.nussknacker.engine.graph.node.IdFieldName
     }
     val message = error.errorType match {

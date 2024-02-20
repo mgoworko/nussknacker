@@ -2,22 +2,27 @@ package pl.touk.nussknacker.ui.api
 
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
-import pl.touk.nussknacker.engine.TypeDefinitionSet
+import org.scalatest.prop.TableDrivenPropertyChecks
 import pl.touk.nussknacker.engine.api.dict.embedded.EmbeddedDictDefinition
 import pl.touk.nussknacker.engine.api.dict.{DictInstance, UiDictServices}
 import pl.touk.nussknacker.engine.api.generics.{MethodTypeInfo, Parameter => GenericsParameter}
 import pl.touk.nussknacker.engine.api.process.ClassExtractionSettings
-import pl.touk.nussknacker.engine.api.typed.typing.{Typed, TypedObjectTypingResult, TypingResult, Unknown}
-import pl.touk.nussknacker.engine.api.{Documentation, MetaData, StreamMetaData, VariableConstants}
-import pl.touk.nussknacker.engine.definition.TypeInfos.{ClazzDefinition, StaticMethodInfo}
-import pl.touk.nussknacker.engine.definition.{DefinitionExtractor, ProcessDefinitionExtractor}
+import pl.touk.nussknacker.engine.api.typed.typing._
+import pl.touk.nussknacker.engine.api.{Documentation, VariableConstants}
+import pl.touk.nussknacker.engine.definition.clazz.{
+  ClassDefinition,
+  ClassDefinitionExtractor,
+  ClassDefinitionSet,
+  StaticMethodDefinition
+}
+import pl.touk.nussknacker.engine.definition.component.ComponentDefinitionWithImplementation
+import pl.touk.nussknacker.engine.definition.globalvariables.ExpressionConfigDefinition
 import pl.touk.nussknacker.engine.dict.{SimpleDictQueryService, SimpleDictRegistry}
 import pl.touk.nussknacker.engine.graph.expression.Expression
 import pl.touk.nussknacker.engine.spel.{ExpressionSuggestion, Parameter}
-import pl.touk.nussknacker.engine.testing.ProcessDefinitionBuilder
-import pl.touk.nussknacker.engine.testing.ProcessDefinitionBuilder._
-import pl.touk.nussknacker.engine.types.EspTypeUtils
+import pl.touk.nussknacker.engine.testing.ModelDefinitionBuilder
 import pl.touk.nussknacker.test.PatientScalaFutures
+import pl.touk.nussknacker.ui.api.ExpressionSuggesterTestData._
 import pl.touk.nussknacker.ui.suggester.{CaretPosition2d, ExpressionSuggester}
 
 import java.time.{Duration, LocalDateTime}
@@ -60,7 +65,11 @@ class Util {
   def withDescription(): Int = 42
 }
 
-class ExpressionSuggesterSpec extends AnyFunSuite with Matchers with PatientScalaFutures {
+class ExpressionSuggesterSpec
+    extends AnyFunSuite
+    with Matchers
+    with PatientScalaFutures
+    with TableDrivenPropertyChecks {
   implicit val classExtractionSettings: ClassExtractionSettings = ClassExtractionSettings.Default
 
   private val dictRegistry = new SimpleDictRegistry(
@@ -72,23 +81,25 @@ class ExpressionSuggesterSpec extends AnyFunSuite with Matchers with PatientScal
 
   private val dictServices = UiDictServices(dictRegistry, new SimpleDictQueryService(dictRegistry, 10))
 
-  private val clazzDefinitions: TypeDefinitionSet = TypeDefinitionSet(
+  private val clazzDefinitions: ClassDefinitionSet = ClassDefinitionSet(
     Set(
-      EspTypeUtils.clazzDefinition(classOf[A]),
-      EspTypeUtils.clazzDefinition(classOf[B]),
-      EspTypeUtils.clazzDefinition(classOf[C]),
-      EspTypeUtils.clazzDefinition(classOf[AA]),
-      EspTypeUtils.clazzDefinition(classOf[WithList]),
-      ClazzDefinition(
+      ClassDefinitionExtractor.extract(classOf[A]),
+      ClassDefinitionExtractor.extract(classOf[B]),
+      ClassDefinitionExtractor.extract(classOf[C]),
+      ClassDefinitionExtractor.extract(classOf[AA]),
+      ClassDefinitionExtractor.extract(classOf[WithList]),
+      ClassDefinition(
         Typed.typedClass[String],
-        Map("toUpperCase" -> List(StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[String]), "toUpperCase", None))),
+        Map(
+          "toUpperCase" -> List(StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[String]), "toUpperCase", None))
+        ),
         Map.empty
       ),
-      ClazzDefinition(
+      ClassDefinition(
         Typed.typedClass[LocalDateTime],
         Map(
           "isBefore" -> List(
-            StaticMethodInfo(
+            StaticMethodDefinition(
               MethodTypeInfo(List(GenericsParameter("arg0", Typed[LocalDateTime])), None, Typed[Boolean]),
               "isBefore",
               None
@@ -97,23 +108,24 @@ class ExpressionSuggesterSpec extends AnyFunSuite with Matchers with PatientScal
         ),
         Map.empty
       ),
-      EspTypeUtils.clazzDefinition(classOf[Util]),
-      EspTypeUtils.clazzDefinition(classOf[Duration]),
-      ClazzDefinition(
+      ClassDefinitionExtractor.extract(classOf[Util]),
+      ClassDefinitionExtractor.extract(classOf[Duration]),
+      ClassDefinition(
         Typed.typedClass[java.util.Map[_, _]],
-        Map("empty" -> List(StaticMethodInfo(MethodTypeInfo(Nil, None, Typed[Boolean]), "empty", None))),
+        Map("empty" -> List(StaticMethodDefinition(MethodTypeInfo(Nil, None, Typed[Boolean]), "empty", None))),
         Map.empty
       ),
     )
   )
 
-  private val expressionConfig: ProcessDefinitionExtractor.ExpressionDefinition[DefinitionExtractor.ObjectDefinition] =
-    ProcessDefinitionBuilder.empty
-      .withGlobalVariable("util", Typed[Util])
+  private val expressionConfig: ExpressionConfigDefinition =
+    ModelDefinitionBuilder.empty
+      .withGlobalVariable("util", new Util)
+      .build
       .expressionConfig
 
   private val expressionSuggester = new ExpressionSuggester(
-    ProcessDefinitionBuilder.toExpressionDefinition(expressionConfig),
+    expressionConfig,
     clazzDefinitions,
     dictServices,
     getClass.getClassLoader,
@@ -254,6 +266,30 @@ class ExpressionSuggesterSpec extends AnyFunSuite with Matchers with PatientScal
     )
   }
 
+  test("should not suggest unreferenceable fields for map literal after dot") {
+    nonStandardFieldNames.foreach { fieldName =>
+      spelSuggestionsFor(s"{'$fieldName': 1}.") shouldBe List(
+        ExpressionSuggestion("empty", Typed[Boolean], fromClass = true, None, Nil)
+      )
+    }
+  }
+
+  test("should suggest fields for map literal using indexing by property") {
+    val expression = s"{key: 1}[k]"
+    spelSuggestionsFor(expression, 0, expression.length - 1) shouldBe List(
+      ExpressionSuggestion("key", Typed.fromInstance(1), fromClass = false, None, Nil)
+    )
+  }
+
+  test("should suggest fields for map literal in indexer") {
+    (nonStandardFieldNames ++ standardFieldNames ++ javaKeywordNames).foreach { fieldName =>
+      val expression = s"{'$fieldName': 1}['']"
+      spelSuggestionsFor(expression, 0, expression.length - 2) shouldBe List(
+        ExpressionSuggestion(fieldName, TypedObjectWithValue(Typed.typedClass[Int], 1), fromClass = false, None, Nil)
+      )
+    }
+  }
+
   test("should suggest dict variable methods") {
     spelSuggestionsFor("#dictFoo.").map(_.methodName) shouldBe List("One", "Two")
   }
@@ -289,7 +325,7 @@ class ExpressionSuggesterSpec extends AnyFunSuite with Matchers with PatientScal
     spelSuggestionsFor("#meta.") shouldBe List(
       ExpressionSuggestion("empty", Typed[Boolean], fromClass = true, None, Nil),
       suggestion("processName", Typed[String]),
-      suggestion("properties", TypedObjectTypingResult(Map("scenarioProperty" -> Typed[String]))),
+      suggestion("properties", Typed.record(Map("scenarioProperty" -> Typed[String]))),
     )
   }
 
@@ -453,7 +489,7 @@ class ExpressionSuggesterSpec extends AnyFunSuite with Matchers with PatientScal
 
   test("should suggest #this in map selection") {
     spelSuggestionsFor("{abc: 1, def: 'xyz'}.![#this]", 0, "{abc: 1, def: 'xyz'}.![#this".length) shouldBe List(
-      suggestion("#this", TypedObjectTypingResult(ListMap("key" -> Typed[String], "value" -> Unknown))),
+      suggestion("#this", Typed.record(ListMap("key" -> Typed[String], "value" -> Unknown))),
     )
   }
 
@@ -614,5 +650,13 @@ class ExpressionSuggesterSpec extends AnyFunSuite with Matchers with PatientScal
       suggestion("#input", Typed[A]),
     )
   }
+
+}
+
+object ExpressionSuggesterTestData {
+
+  val nonStandardFieldNames: List[String] = List("1", " ", "", "1.1", "?", "#", ".", " a ", "  a", "a  ")
+  val javaKeywordNames: List[String]      = List("class", "null", "false")
+  val standardFieldNames: List[String]    = List("key1")
 
 }

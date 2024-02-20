@@ -4,6 +4,7 @@ import cats.Applicative
 import cats.data.ValidatedNel
 import pl.touk.nussknacker.engine.api.NodeId
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.InASingleNode
+import pl.touk.nussknacker.engine.api.process.ProcessName
 
 sealed trait ProcessCompilationError {
   def nodeIds: Set[String]
@@ -37,6 +38,9 @@ object ProcessCompilationError {
 
   }
 
+  // Errors which can't be fixed by editing node parameters without context of entire scenario
+  sealed trait ScenarioGraphLevelError { self: ProcessCompilationError => }
+
   // All errors which we want to be seen in process as properties errors should extend this trait
   sealed trait ScenarioPropertiesError {
     self: ProcessCompilationError =>
@@ -47,15 +51,17 @@ object ProcessCompilationError {
 
   final case class MissingPart(nodeId: String) extends ProcessCompilationError with InASingleNode
 
-  final case class InvalidRootNode(nodeId: String) extends ProcessUncanonizationError with InASingleNode
+  final case class InvalidRootNode(nodeIds: Set[String]) extends ProcessUncanonizationError with ScenarioGraphLevelError
 
-  object EmptyProcess extends ProcessUncanonizationError {
+  object EmptyProcess extends ProcessUncanonizationError with ScenarioGraphLevelError {
     override def nodeIds = Set()
   }
 
-  final case class InvalidTailOfBranch(nodeId: String) extends ProcessUncanonizationError with InASingleNode
+  final case class InvalidTailOfBranch(nodeIds: Set[String])
+      extends ProcessUncanonizationError
+      with ScenarioGraphLevelError
 
-  final case class DuplicatedNodeIds(nodeIds: Set[String]) extends ProcessCompilationError
+  final case class DuplicatedNodeIds(nodeIds: Set[String]) extends ProcessCompilationError with ScenarioGraphLevelError
 
   final case class NonUniqueEdgeType(edgeType: String, nodeId: String)
       extends ProcessCompilationError
@@ -63,7 +69,7 @@ object ProcessCompilationError {
 
   final case class NonUniqueEdge(nodeId: String, target: String) extends ProcessCompilationError with InASingleNode
 
-  final case class LooseNode(nodeId: String) extends ProcessCompilationError with InASingleNode
+  final case class LooseNode(nodeIds: Set[String]) extends ProcessCompilationError with ScenarioGraphLevelError
 
   final case class DisabledNode(nodeId: String) extends ProcessCompilationError with InASingleNode
 
@@ -89,6 +95,14 @@ object ProcessCompilationError {
       nodeId: String,
       paramName: String,
       subFieldName: Option[String],
+      originalExpr: String
+  ) extends PartSubGraphCompilationError
+      with InASingleNode
+
+  final case class InvalidValidationExpression(
+      message: String,
+      nodeId: String,
+      paramName: String,
       originalExpr: String
   ) extends PartSubGraphCompilationError
       with InASingleNode
@@ -248,40 +262,96 @@ object ProcessCompilationError {
       OverwrittenVariable(variableName, nodeId.id, paramName)
   }
 
-  final case class InvalidVariableOutputName(name: String, nodeId: String, paramName: Option[String])
+  final case class InvalidVariableName(name: String, nodeId: String, paramName: Option[String])
       extends PartSubGraphCompilationError
       with InASingleNode
 
-  object InvalidVariableOutputName {
+  object InvalidVariableName {
     def apply(variableName: String, paramName: Option[String])(implicit nodeId: NodeId): PartSubGraphCompilationError =
-      InvalidVariableOutputName(variableName, nodeId.id, paramName)
+      InvalidVariableName(variableName, nodeId.id, paramName)
   }
 
   final case class FragmentOutputNotDefined(id: String, nodeIds: Set[String]) extends ProcessCompilationError
 
+  final case class DuplicateFragmentInputParameter(paramName: String, nodeId: String)
+      extends PartSubGraphCompilationError
+      with InASingleNode
+
   final case class RequireValueFromEmptyFixedList(paramName: String, nodeIds: Set[String])
-      extends ProcessCompilationError
+      extends PartSubGraphCompilationError
 
   final case class InitialValueNotPresentInPossibleValues(paramName: String, nodeIds: Set[String])
-      extends ProcessCompilationError
+      extends PartSubGraphCompilationError
 
   final case class UnsupportedFixedValuesType(paramName: String, typ: String, nodeIds: Set[String])
-      extends ProcessCompilationError
+      extends PartSubGraphCompilationError
 
   final case class UnknownFragmentOutput(id: String, nodeIds: Set[String]) extends ProcessCompilationError
 
-  final case class DisablingManyOutputsFragment(id: String, nodeIds: Set[String]) extends ProcessCompilationError
+  final case class DisablingManyOutputsFragment(fragmentNodeId: String)
+      extends ProcessCompilationError
+      with ScenarioGraphLevelError {
+    override def nodeIds: Set[String] = Set(fragmentNodeId)
+  }
 
-  final case class DisablingNoOutputsFragment(id: String) extends ProcessCompilationError {
-    override def nodeIds: Set[String] = Set.empty
+  final case class DisablingNoOutputsFragment(fragmentNodeId: String)
+      extends ProcessCompilationError
+      with ScenarioGraphLevelError {
+    override def nodeIds: Set[String] = Set(fragmentNodeId)
   }
 
   final case class UnknownFragment(id: String, nodeId: String) extends ProcessCompilationError with InASingleNode
 
   final case class InvalidFragment(id: String, nodeId: String) extends ProcessCompilationError with InASingleNode
 
-  final case class MultipleOutputsForName(name: String, nodeId: String)
-      extends ProcessCompilationError
+  sealed trait DuplicateFragmentOutputNames extends ProcessCompilationError {
+    val duplicatedVarName: String
+  }
+
+  final case class DuplicateFragmentOutputNamesInScenario(duplicatedVarName: String, nodeId: String)
+      extends DuplicateFragmentOutputNames
+      with InASingleNode
+
+  final case class DuplicateFragmentOutputNamesInFragment(duplicatedVarName: String, nodeIds: Set[String])
+      extends DuplicateFragmentOutputNames
+      with ScenarioGraphLevelError
+
+  final case class DictNotDeclared(dictId: String, nodeId: String, paramName: String)
+      extends PartSubGraphCompilationError
+      with InASingleNode
+
+  final case class DictEntryWithLabelNotExists(
+      dictId: String,
+      label: String,
+      possibleLabels: Option[List[String]],
+      nodeId: String,
+      paramName: String
+  ) extends PartSubGraphCompilationError
+      with InASingleNode
+
+  final case class DictEntryWithKeyNotExists(
+      dictId: String,
+      key: String,
+      possibleKeys: Option[List[String]],
+      nodeId: String,
+      paramName: String
+  ) extends PartSubGraphCompilationError
+      with InASingleNode
+
+  final case class DictLabelByKeyResolutionFailed(
+      dictId: String,
+      key: String,
+      nodeId: String,
+      paramName: String
+  ) extends PartSubGraphCompilationError
+      with InASingleNode
+
+  final case class KeyWithLabelExpressionParsingError(
+      keyWithLabel: String,
+      message: String,
+      paramName: String,
+      nodeId: String
+  ) extends PartSubGraphCompilationError
       with InASingleNode
 
   final case class CustomNodeError(nodeId: String, message: String, paramName: Option[String])
@@ -314,9 +384,11 @@ object ProcessCompilationError {
     val id: String
   }
 
-  final case class ScenarioIdError(errorType: IdErrorType, id: String, isFragment: Boolean)
+  final case class ScenarioNameError(errorType: IdErrorType, name: ProcessName, isFragment: Boolean)
       extends IdError
-      with ScenarioPropertiesError
+      with ScenarioPropertiesError {
+    override val id: String = name.value
+  }
 
   final case class NodeIdValidationError(errorType: IdErrorType, id: String) extends IdError with InASingleNode {
     override protected def nodeId: String = id

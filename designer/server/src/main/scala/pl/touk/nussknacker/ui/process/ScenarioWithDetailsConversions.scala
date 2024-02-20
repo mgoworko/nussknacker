@@ -1,31 +1,34 @@
 package pl.touk.nussknacker.ui.process
 
-import pl.touk.nussknacker.engine.api.displayedgraph.DisplayableProcess
-import pl.touk.nussknacker.restmodel.scenariodetails.ScenarioWithDetails
-import pl.touk.nussknacker.restmodel.validation.ValidatedDisplayableProcess
+import pl.touk.nussknacker.engine.api.graph.ScenarioGraph
+import pl.touk.nussknacker.engine.api.process.ProcessId
+import pl.touk.nussknacker.restmodel.scenariodetails.{ScenarioParameters, ScenarioWithDetails}
+import pl.touk.nussknacker.restmodel.validation.ScenarioGraphWithValidationResult
 import pl.touk.nussknacker.ui.process.repository.ScenarioWithDetailsEntity
 
 object ScenarioWithDetailsConversions {
 
-  def fromEntity(details: ScenarioWithDetailsEntity[ValidatedDisplayableProcess]): ScenarioWithDetails =
-    fromEntityIgnoringGraphAndValidationResult(details).withScenarioGraphAndValidationResult(
-      details.json
-    )
+  def fromEntity(
+      details: ScenarioWithDetailsEntity[ScenarioGraphWithValidationResult],
+      parameters: ScenarioParameters
+  ): ScenarioWithDetails =
+    fromEntityIgnoringGraphAndValidationResult(details, parameters)
+      .withScenarioGraph(details.json.scenarioGraph)
+      .withValidationResult(details.json.validationResult)
 
   def fromEntityWithScenarioGraph(
-      details: ScenarioWithDetailsEntity[DisplayableProcess]
+      details: ScenarioWithDetailsEntity[ScenarioGraph],
+      parameters: ScenarioParameters
   ): ScenarioWithDetails =
-    fromEntityIgnoringGraphAndValidationResult(details).withScenarioGraphAndValidationResult(
-      ValidatedDisplayableProcess.withEmptyValidationResult(details.json)
-    )
+    fromEntityIgnoringGraphAndValidationResult(details, parameters).withScenarioGraph(details.json)
 
   def fromEntityIgnoringGraphAndValidationResult(
-      details: ScenarioWithDetailsEntity[_]
+      details: ScenarioWithDetailsEntity[_],
+      parameters: ScenarioParameters
   ): ScenarioWithDetails = {
     ScenarioWithDetails(
-      id = details.id,
       name = details.name,
-      processId = details.processId,
+      processId = Some(details.processId),
       processVersionId = details.processVersionId,
       isLatestVersion = details.isLatestVersion,
       description = details.description,
@@ -33,6 +36,8 @@ object ScenarioWithDetailsConversions {
       isFragment = details.isFragment,
       processingType = details.processingType,
       processCategory = details.processCategory,
+      processingMode = parameters.processingMode,
+      engineSetupName = parameters.engineSetupName,
       modificationDate = details.modificationDate,
       modifiedAt = details.modifiedAt,
       modifiedBy = details.modifiedBy,
@@ -42,7 +47,8 @@ object ScenarioWithDetailsConversions {
       lastDeployedAction = details.lastDeployedAction,
       lastStateAction = details.lastStateAction,
       lastAction = details.lastAction,
-      json = None,
+      scenarioGraph = None,
+      validationResult = None,
       history = details.history,
       modelVersion = details.modelVersion,
       state = None
@@ -56,15 +62,12 @@ object ScenarioWithDetailsConversions {
       toEntity(())
     }
 
-    def toEntityWithScenarioGraphUnsafe: ScenarioWithDetailsEntity[DisplayableProcess] = {
-      toEntity(scenarioWithDetails.scenarioGraphAndValidationResultUnsafe.toDisplayable)
-    }
-
     private def toEntity[T](prepareJson: => T): ScenarioWithDetailsEntity[T] = {
       ScenarioWithDetailsEntity(
-        id = scenarioWithDetails.id,
         name = scenarioWithDetails.name,
-        processId = scenarioWithDetails.processId,
+        // We can't just use processIdUnsafe because it is used also for testMigrations which gets ScenarioWithDetails
+        // via REST API so this information will be missing
+        processId = scenarioWithDetails.processId.getOrElse(ProcessId(-1)),
         processVersionId = scenarioWithDetails.processVersionId,
         isLatestVersion = scenarioWithDetails.isLatestVersion,
         description = scenarioWithDetails.description,

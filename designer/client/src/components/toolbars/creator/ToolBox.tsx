@@ -1,8 +1,7 @@
 import React, { useMemo } from "react";
 import { useSelector } from "react-redux";
 import "react-treeview/react-treeview.css";
-import { filterComponentsByLabel, getCategoryComponentGroups } from "../../../common/ProcessDefinitionUtils";
-import { getProcessCategory } from "../../../reducers/selectors/graph";
+import { filterComponentsByLabel } from "../../../common/ProcessDefinitionUtils";
 import { getProcessDefinitionData } from "../../../reducers/selectors/settings";
 import { ComponentGroup } from "../../../types";
 import { ToolboxComponentGroup } from "./ToolboxComponentGroup";
@@ -28,6 +27,7 @@ const StyledToolbox = styled("div")(
             border: 1px solid ${alpha(theme.custom.colors.arsenic, 50)};
             cursor: pointer;
             display: flex;
+            align-items: center;
             padding: 0 5px;
             height: 28px;
             line-height: 28px;
@@ -86,22 +86,14 @@ const StyledToolbox = styled("div")(
             margin-right: 5px;
             margin-bottom: 2px;
         }
-
-        .group-label {
-            width: 95%;
-        }
     `,
 );
 
 export default function ToolBox(props: { filter: string }): JSX.Element {
     const processDefinitionData = useSelector(getProcessDefinitionData);
-    const processCategory = useSelector(getProcessCategory);
     const { t } = useTranslation();
 
-    const componentGroups: ComponentGroup[] = useMemo(
-        () => getCategoryComponentGroups(processDefinitionData, processCategory),
-        [processDefinitionData, processCategory],
-    );
+    const componentGroups: ComponentGroup[] = useMemo(() => processDefinitionData.componentGroups, [processDefinitionData]);
 
     const filters = useMemo(() => props.filter?.toLowerCase().split(/\s/).filter(Boolean), [props.filter]);
 

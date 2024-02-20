@@ -1,13 +1,19 @@
 package pl.touk.nussknacker.engine.api.typed.supertype
 
-import java.lang
+import cats.data.NonEmptyList
 
+import java.lang
 import org.apache.commons.lang3.ClassUtils
 import pl.touk.nussknacker.engine.api.typed.supertype.NumberTypesPromotionStrategy.AllNumbers
 import pl.touk.nussknacker.engine.api.typed.typing._
 
 import scala.util.Try
 
+/**
+  * Extending classes are in spirit of "Be type safety as much as possible, but also provide some helpful
+  * conversion for types not in the same jvm class hierarchy like boxed Integer to boxed Long and so on".
+  * WARNING: Evaluation of SpEL expressions fit into this spirit, for other language evaluation engines you need to provide such a compatibility.
+  */
 trait NumberTypesPromotionStrategy extends Serializable {
 
   private val cachedPromotionResults: Map[(Class[_], Class[_]), ReturnedType] =
@@ -34,9 +40,9 @@ trait NumberTypesPromotionStrategy extends Serializable {
     }
   }
 
-  private def toSingleTypesSet(typ: TypingResult): Either[Unknown.type, Set[SingleTypingResult]] =
+  private def toSingleTypesSet(typ: TypingResult): Either[Unknown.type, NonEmptyList[SingleTypingResult]] =
     typ match {
-      case s: SingleTypingResult => Right(Set(s))
+      case s: SingleTypingResult => Right(NonEmptyList.one(s))
       case u: TypedUnion         => Right(u.possibleTypes)
       case TypedNull             => Left(Unknown)
       case Unknown               => Left(Unknown)
@@ -103,7 +109,7 @@ object NumberTypesPromotionStrategy {
 
     override protected def handleFloatingType(firstFloating: Class[_]): TypedClass = {
       if (firstFloating == classOf[lang.Float]) {
-        Typed.typedClass(classOf[lang.Double])
+        Typed.typedClass(classOf[Double])
       } else {
         Typed.typedClass(firstFloating)
       }
@@ -113,9 +119,29 @@ object NumberTypesPromotionStrategy {
       if (firstDecimal == classOf[lang.Byte] || firstDecimal == classOf[lang.Short] || firstDecimal == classOf[
           lang.Integer
         ]) {
-        Typed.typedClass(classOf[lang.Long])
+        Typed.typedClass(classOf[Long])
       } else {
         Typed.typedClass(firstDecimal)
+      }
+    }
+
+  }
+
+  object ForLargeFloatingNumbersOperation extends BaseToCommonWidestTypePromotionStrategy {
+
+    override protected def handleFloatingType(firstFloating: Class[_]): TypedClass = {
+      if (firstFloating == classOf[java.math.BigDecimal]) {
+        Typed.typedClass(classOf[java.math.BigDecimal])
+      } else {
+        Typed.typedClass(classOf[Double])
+      }
+    }
+
+    override protected def handleDecimalType(firstDecimal: Class[_]): TypedClass = {
+      if (firstDecimal == classOf[java.math.BigInteger]) {
+        Typed.typedClass(classOf[java.math.BigDecimal])
+      } else {
+        Typed.typedClass(classOf[Double])
       }
     }
 
@@ -137,27 +163,13 @@ object NumberTypesPromotionStrategy {
         val floating = both.find(FloatingNumbers.contains).get
         handleFloatingType(floating)
       } else { // unknown Number
-        Typed.typedClass[java.lang.Double]
+        Typed.typedClass[Number]
       }
     }
 
     protected def handleFloatingType(firstFloating: Class[_]): TypedClass = Typed.typedClass(firstFloating)
 
     protected def handleDecimalType(firstDecimal: Class[_]): TypedClass = Typed.typedClass(firstDecimal)
-
-  }
-
-  object ToSupertype extends ReturningSingleClassPromotionStrategy {
-
-    override def promoteClassesInternal(left: Class[_], right: Class[_]): TypedClass = {
-      if (left.isAssignableFrom(right)) {
-        Typed.typedClass(left)
-      } else if (right.isAssignableFrom(left)) {
-        Typed.typedClass(right)
-      } else {
-        Typed.typedClass[Number]
-      }
-    }
 
   }
 
@@ -173,11 +185,13 @@ object NumberTypesPromotionStrategy {
         Typed[java.math.BigInteger]
       } else if (left == classOf[java.lang.Double] || right == classOf[java.lang.Double] ||
         left == classOf[java.lang.Float] || right == classOf[java.lang.Float]) {
-        Typed[java.lang.Double]
+        Typed[Double]
       } else if (left == classOf[java.lang.Long] || right == classOf[java.lang.Long]) {
-        Typed[java.lang.Long]
+        Typed[Long]
       } else {
-        Typed(Typed[java.lang.Integer], Typed[java.lang.Long]) // it depends if there was overflow or not
+        // This is the only place where we return union. The runtime type depends on whether there was overflow or not.
+        // We should consider using just the Number here
+        Typed(Typed[java.lang.Integer], Typed[Long])
       }
     }
 

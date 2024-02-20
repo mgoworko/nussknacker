@@ -1,17 +1,14 @@
 package pl.touk.nussknacker.engine.compiledgraph
 
+import cats.implicits._
+import pl.touk.nussknacker.engine.api.process.{ComponentUseCase, ServiceExecutionContext}
 import pl.touk.nussknacker.engine.api.test.InvocationCollectors.{
   CollectableAction,
   ServiceInvocationCollector,
   ToCollect,
   TransmissionNames
 }
-import pl.touk.nussknacker.engine.api.{Context, ContextId, MetaData, ServiceInvoker}
-import pl.touk.nussknacker.engine.compiledgraph.evaluatedparam.Parameter
-import pl.touk.nussknacker.engine.expression.ExpressionEvaluator
-import cats.implicits._
-import pl.touk.nussknacker.engine.api.process.ComponentUseCase
-import pl.touk.nussknacker.engine.api.NodeId
+import pl.touk.nussknacker.engine.api.{Context, ContextId, NodeId, ServiceInvoker}
 import pl.touk.nussknacker.engine.resultcollector.ResultCollector
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -21,21 +18,22 @@ object service {
   case class ServiceRef(
       id: String,
       invoker: ServiceInvoker,
-      parameters: List[Parameter],
-      resultCollector: ResultCollector
+      parameters: List[CompiledParameter],
+      resultCollector: ResultCollector,
   ) {
 
-    def invoke(ctx: Context, expressionEvaluator: ExpressionEvaluator)(
+    def invoke(ctx: Context, serviceExecutionContext: ServiceExecutionContext)(
         implicit nodeId: NodeId,
-        metaData: MetaData,
-        ec: ExecutionContext,
         componentUseCase: ComponentUseCase
-    ): (Map[String, AnyRef], Future[Any]) = {
+    ): Future[Any] = {
 
-      val (_, preparedParams) = expressionEvaluator.evaluateParameters(parameters, ctx)
-      val contextId           = ContextId(ctx.id)
-      val collector           = new BaseServiceInvocationCollector(resultCollector, contextId, nodeId, id)
-      (preparedParams, invoker.invokeService(preparedParams)(ec, collector, contextId, componentUseCase))
+      val contextId = ContextId(ctx.id)
+      val collector = new BaseServiceInvocationCollector(resultCollector, contextId, nodeId, id)
+      invoker.invoke(ctx)(
+        serviceExecutionContext.executionContext,
+        collector,
+        componentUseCase
+      )
     }
 
   }

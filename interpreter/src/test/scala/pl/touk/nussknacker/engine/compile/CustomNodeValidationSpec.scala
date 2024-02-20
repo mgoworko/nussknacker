@@ -2,32 +2,25 @@ package pl.touk.nussknacker.engine.compile
 
 import cats.data.Validated.{Invalid, Valid}
 import cats.data.{NonEmptyList, Validated}
-import com.typesafe.config.ConfigFactory
 import org.scalatest.OptionValues
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
-import pl.touk.nussknacker.engine.api._
-import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.{
-  BlankParameter,
-  CustomNodeError,
-  EmptyMandatoryParameter,
-  ExpressionParserCompilationError,
-  InvalidTailOfBranch,
-  MissingParameters
-}
+import pl.touk.nussknacker.engine.api.component.{ComponentDefinition, DesignerWideComponentId}
+import pl.touk.nussknacker.engine.api.context.ProcessCompilationError._
 import pl.touk.nussknacker.engine.api.process._
 import pl.touk.nussknacker.engine.api.typed.typing.{Typed, TypedObjectTypingResult, Unknown}
 import pl.touk.nussknacker.engine.build.{GraphBuilder, ScenarioBuilder}
+import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.compile.validationHelpers._
-import pl.touk.nussknacker.engine.definition.ProcessDefinitionExtractor.ModelDefinitionWithTypes
-import pl.touk.nussknacker.engine.definition.{FragmentComponentDefinitionExtractor, ProcessDefinitionExtractor}
+import pl.touk.nussknacker.engine.definition.component.ComponentDefinitionWithImplementation
+import pl.touk.nussknacker.engine.definition.model.{ModelDefinition, ModelDefinitionWithClasses}
 import pl.touk.nussknacker.engine.dict.SimpleDictRegistry
 import pl.touk.nussknacker.engine.expression.PositionRange
-import pl.touk.nussknacker.engine.{CustomProcessValidatorLoader, spel}
+import pl.touk.nussknacker.engine.modelconfig.ComponentsUiConfig
 import pl.touk.nussknacker.engine.spel.SpelExpressionTypingInfo
-import pl.touk.nussknacker.engine.testing.LocalModelData
-import pl.touk.nussknacker.engine.util.namespaces.ObjectNamingProvider
+import pl.touk.nussknacker.engine.testing.ModelDefinitionBuilder
 import pl.touk.nussknacker.engine.variables.MetaVariables
+import pl.touk.nussknacker.engine.{CustomProcessValidatorLoader, spel}
 
 import scala.collection.Set
 
@@ -35,70 +28,47 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
 
   import spel.Implicits._
 
-  class MyProcessConfigCreator extends EmptyProcessConfigCreator {
-
-    override def customStreamTransformers(
-        processObjectDependencies: ProcessObjectDependencies
-    ): Map[String, WithCategories[CustomStreamTransformer]] = Map(
-      "myCustomStreamTransformer"        -> WithCategories.anyCategory(SimpleStreamTransformer),
-      "addingVariableStreamTransformer"  -> WithCategories.anyCategory(AddingVariableStreamTransformer),
-      "clearingContextStreamTransformer" -> WithCategories.anyCategory(ClearingContextStreamTransformer),
-      "producingTupleTransformer"        -> WithCategories.anyCategory(ProducingTupleTransformer),
-      "unionTransformer"                 -> WithCategories.anyCategory(UnionTransformer),
-      "unionTransformerWithMainBranch"   -> WithCategories.anyCategory(UnionTransformerWithMainBranch),
-      "nonEndingCustomNodeReturningTransformation" -> WithCategories.anyCategory(
-        NonEndingCustomNodeReturningTransformation
-      ),
-      "nonEndingCustomNodeReturningUnit" -> WithCategories.anyCategory(NonEndingCustomNodeReturningUnit),
-      "addingVariableOptionalEndingCustomNode" -> WithCategories.anyCategory(
-        AddingVariableOptionalEndingStreamTransformer
-      ),
-      "optionalEndingTransformer" -> WithCategories.anyCategory(OptionalEndingStreamTransformer),
-      "noBranchParameters"        -> WithCategories.anyCategory(DynamicNoBranchParameterJoinTransformer)
-    )
-
-    override def sourceFactories(
-        processObjectDependencies: ProcessObjectDependencies
-    ): Map[String, WithCategories[SourceFactory]] = Map("mySource" -> WithCategories.anyCategory(SimpleStringSource))
-
-    override def sinkFactories(
-        processObjectDependencies: ProcessObjectDependencies
-    ): Map[String, WithCategories[SinkFactory]] = Map(
-      "dummySink" -> WithCategories.anyCategory(SinkFactory.noParam(new Sink {}))
-    )
-
-    override def services(processObjectDependencies: ProcessObjectDependencies): Map[String, WithCategories[Service]] =
-      Map(
-        "stringService" -> WithCategories.anyCategory(SimpleStringService),
-        "enricher"      -> WithCategories.anyCategory(Enricher)
-      )
-
-  }
+  private val components = List(
+    ComponentDefinition("myCustomStreamTransformer", SimpleStreamTransformer),
+    ComponentDefinition("addingVariableStreamTransformer", AddingVariableStreamTransformer),
+    ComponentDefinition("clearingContextStreamTransformer", ClearingContextStreamTransformer),
+    ComponentDefinition("producingTupleTransformer", ProducingTupleTransformer),
+    ComponentDefinition("unionTransformer", UnionTransformer),
+    ComponentDefinition("unionTransformerWithMainBranch", UnionTransformerWithMainBranch),
+    ComponentDefinition("nonEndingCustomNodeReturningTransformation", NonEndingCustomNodeReturningTransformation),
+    ComponentDefinition("nonEndingCustomNodeReturningUnit", NonEndingCustomNodeReturningUnit),
+    ComponentDefinition("addingVariableOptionalEndingCustomNode", AddingVariableOptionalEndingStreamTransformer),
+    ComponentDefinition("optionalEndingTransformer", OptionalEndingStreamTransformer),
+    ComponentDefinition("noBranchParameters", DynamicNoBranchParameterJoinTransformer),
+    ComponentDefinition("mySource", SimpleStringSource),
+    ComponentDefinition("dummySink", SinkFactory.noParam(new Sink {})),
+    ComponentDefinition("stringService", SimpleStringService),
+    ComponentDefinition("enricher", Enricher)
+  )
 
   private val processBase = ScenarioBuilder.streaming("proc1").source("sourceId", "mySource")
 
-  private val configCreator = new MyProcessConfigCreator
-
-  private val objectWithMethodDef = ProcessDefinitionExtractor.extractObjectWithMethods(
-    configCreator,
-    getClass.getClassLoader,
-    process.ProcessObjectDependencies(ConfigFactory.empty, ObjectNamingProvider(getClass.getClassLoader)),
-    category = None
+  private val modelDefinition = ModelDefinition(
+    ComponentDefinitionWithImplementation
+      .forList(components, ComponentsUiConfig.Empty, id => DesignerWideComponentId(id.toString), Map.empty),
+    ModelDefinitionBuilder.emptyExpressionConfig,
+    ClassExtractionSettings.Default
   )
 
   private val validator = ProcessValidator.default(
-    ModelDefinitionWithTypes(objectWithMethodDef),
-    ConfigFactory.empty,
+    ModelDefinitionWithClasses(modelDefinition),
     new SimpleDictRegistry(Map.empty),
     CustomProcessValidatorLoader.emptyCustomProcessValidator
   )
+
+  private def validate(process: CanonicalProcess) = validator.validate(process, isFragment = false)
 
   test("valid scenario") {
     val validProcess = processBase
       .customNode("custom1", "outPutVar", "myCustomStreamTransformer", "stringVal" -> "#additionalVar1")
       .emptySink("out", "dummySink")
 
-    val validationResult = validator.validate(validProcess)
+    val validationResult = validate(validProcess)
     validationResult.result.isValid shouldBe true
     validationResult.variablesInNodes.get("sourceId").value shouldBe Map(
       "meta" -> MetaVariables.typingResult(validProcess.metaData)
@@ -123,7 +93,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
         "stringVal" -> "'someValue'"
       )
 
-    val validationResult = validator.validate(validProcess)
+    val validationResult = validate(validProcess)
     validationResult.result.isValid shouldBe true
     validationResult.variablesInNodes.get("sourceId").value shouldBe Map(
       "meta" -> MetaVariables.typingResult(validProcess.metaData)
@@ -138,7 +108,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
     val validProcess = processBase
       .endingCustomNode("custom1", None, "optionalEndingTransformer", "stringVal" -> "'someValue'")
 
-    val validationResult = validator.validate(validProcess)
+    val validationResult = validate(validProcess)
     validationResult.result.isValid shouldBe true
     validationResult.variablesInNodes.get("sourceId").value shouldBe Map(
       "meta" -> MetaVariables.typingResult(validProcess.metaData)
@@ -154,7 +124,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
       .customNode("custom1", "outPutVar", "optionalEndingTransformer", "stringVal" -> "'someValue'")
       .emptySink("out", "dummySink")
 
-    val validationResult = validator.validate(validProcess)
+    val validationResult = validate(validProcess)
     validationResult.result.isValid shouldBe true
     validationResult.variablesInNodes.get("sourceId").value shouldBe Map(
       "meta" -> MetaVariables.typingResult(validProcess.metaData)
@@ -179,8 +149,8 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
         "stringVal" -> "'someValue'"
       )
 
-    validator.validate(invalidProcess).result should matchPattern {
-      case Invalid(NonEmptyList(InvalidTailOfBranch("custom1"), _)) =>
+    validate(invalidProcess).result should matchPattern {
+      case Invalid(NonEmptyList(InvalidTailOfBranch(nodeIds), _)) if nodeIds == Set("custom1") =>
     }
   }
 
@@ -188,8 +158,8 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
     val invalidProcess = processBase
       .endingCustomNode("custom1", Some("outputVar"), "nonEndingCustomNodeReturningUnit", "stringVal" -> "'someValue'")
 
-    validator.validate(invalidProcess).result should matchPattern {
-      case Invalid(NonEmptyList(InvalidTailOfBranch("custom1"), _)) =>
+    validate(invalidProcess).result should matchPattern {
+      case Invalid(NonEmptyList(InvalidTailOfBranch(nodeIds), _)) if nodeIds == Set("custom1") =>
     }
   }
 
@@ -198,7 +168,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
       .customNode("custom1", "outPutVar", "myCustomStreamTransformer", "stringVal" -> "#nonExisitngVar")
       .emptySink("out", "dummySink")
 
-    validator.validate(invalidProcess).result should matchPattern {
+    validate(invalidProcess).result should matchPattern {
       case Invalid(
             NonEmptyList(
               ExpressionParserCompilationError(
@@ -219,7 +189,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
       .emptySink("out", "dummySink")
 
     val expectedMsg = s"Bad expression type, expected: String, found: ${Typed.fromInstance(42).display}"
-    validator.validate(invalidProcess).result should matchPattern {
+    validate(invalidProcess).result should matchPattern {
       case Invalid(
             NonEmptyList(ExpressionParserCompilationError(`expectedMsg`, "custom1", Some("stringVal"), "42"), _)
           ) =>
@@ -234,7 +204,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
       .buildSimpleVariable("out", "out", "#outPutVar")
       .emptySink(endNodeId, "dummySink")
 
-    val compilationResult = validator.validate(validProcess)
+    val compilationResult = validate(validProcess)
     compilationResult.result should matchPattern { case Valid(_) =>
     }
     compilationResult.typing(endNodeId).inputValidationContext.get(outputVarName).value shouldEqual Typed[String]
@@ -245,7 +215,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
       .customNodeNoOutput("custom1", "addingVariableStreamTransformer")
       .emptySink("out", "dummySink")
 
-    val missingOutValidationResult = validator.validate(missingOutputVarProcess).result
+    val missingOutValidationResult = validate(missingOutputVarProcess).result
     missingOutValidationResult.isValid shouldBe false
     val missingOutErrors = missingOutValidationResult.swap.toOption.value.toList
     missingOutErrors should have size 1
@@ -260,7 +230,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
       .buildSimpleVariable("out", "out", "#input")
       .emptySink("end", "dummySink")
 
-    val redundantOutValidationResult = validator.validate(redundantOutputVarProcess).result
+    val redundantOutValidationResult = validate(redundantOutputVarProcess).result
     redundantOutValidationResult.isValid shouldBe false
     val redundantOutErrors = redundantOutValidationResult.swap.toOption.value.toList
     redundantOutErrors should have size 1
@@ -275,7 +245,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
       .buildSimpleVariable("out", "result", "#outPutVar.field1")
       .emptySink("end", "dummySink")
 
-    val validationResult = validator.validate(validProcess).result
+    val validationResult = validate(validProcess).result
     validationResult should matchPattern { case Valid(_) =>
     }
 
@@ -284,7 +254,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
       .buildSimpleVariable("out", "result", "#outPutVar.field22")
       .emptySink("end", "dummySink")
 
-    val validationResult2 = validator.validate(invalidProcess).result
+    val validationResult2 = validate(invalidProcess).result
     validationResult2.isValid shouldBe false
     val errors = validationResult2.swap.toOption.value.toList
     errors should have size 1
@@ -297,17 +267,17 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
   test("valid scenario using context transformation api - union") {
     val validProcess = processWithUnion("#outPutVar.branch1")
 
-    val validationResult = validator.validate(validProcess)
+    val validationResult = validate(validProcess)
     validationResult.result should matchPattern { case Valid(_) =>
     }
-    validationResult.variablesInNodes("stringService")("outPutVar") shouldBe TypedObjectTypingResult(
+    validationResult.variablesInNodes("stringService")("outPutVar") shouldBe Typed.record(
       Map("branch2" -> Typed[Int], "branch1" -> Typed[String])
     )
   }
 
   test("invalid scenario using context transformation api - union") {
     val invalidProcess    = processWithUnion("#outPutVar.branch2")
-    val validationResult2 = validator.validate(invalidProcess).result
+    val validationResult2 = validate(invalidProcess).result
 
     val errors = validationResult2.swap.toOption.value.toList
     errors should have size 1
@@ -324,7 +294,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
   test("global variables in scope after custom context transformation") {
     val process = processWithUnion("#meta.processName")
 
-    val validationResult = validator.validate(process).result
+    val validationResult = validate(process).result
     validationResult should matchPattern { case Valid(_) =>
     }
   }
@@ -348,9 +318,9 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
           )
           .processorEnd("stringService", "stringService", "stringParam" -> "''")
       )
-    val validationResult = validator.validate(process)
+    val validationResult = validate(process)
 
-    validationResult.variablesInNodes("stringService")("outPutVar") shouldBe TypedObjectTypingResult(
+    validationResult.variablesInNodes("stringService")("outPutVar") shouldBe Typed.record(
       Map("branch1" -> Typed[String])
     )
     val errors = validationResult.result.swap.toList.flatMap(_.toList).map(_.nodeIds)
@@ -405,7 +375,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
             .processorEnd("stringService", "stringService", "stringParam" -> "'123'")
         )
 
-    val validationResult = validator.validate(process)
+    val validationResult = validate(process)
     validationResult.result should matchPattern { case Valid(_) =>
     }
 
@@ -465,7 +435,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
             .processorEnd("stringService", "stringService", "stringParam" -> "'123'")
         )
 
-    val validationResult = validator.validate(process)
+    val validationResult = validate(process)
     val expectedMsg      = s"Bad expression type, expected: CharSequence, found: ${Typed.fromInstance(123).display}"
     validationResult.result should matchPattern {
       case Invalid(
@@ -501,7 +471,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
             .processorEnd("stringService", "stringService", "stringParam" -> "'123'")
         )
 
-    val validationResult = validator.validate(process)
+    val validationResult = validate(process)
     validationResult.result shouldBe Invalid(
       NonEmptyList(
         BlankParameter(
@@ -520,7 +490,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
       .enricher("enricher", "outPutVar", "enricher")
       .emptySink("out", "dummySink")
 
-    val validationResult = validator.validate(validProcess)
+    val validationResult = validate(validProcess)
     validationResult.result.isValid shouldBe true
     validationResult.variablesInNodes.get("sourceId").value shouldBe Map(
       "meta" -> MetaVariables.typingResult(validProcess.metaData)
@@ -562,7 +532,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
             )
             .processorEnd("stringService", "stringService", "stringParam" -> "'123'")
         )
-    val validationResult = validator.validate(validProcess)
+    val validationResult = validate(validProcess)
 
     validationResult.result shouldBe Symbol("valid")
   }
@@ -591,7 +561,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
             .emptySink("sink", "dummySink")
         )
 
-    val validationResult = validator.validate(process)
+    val validationResult = validate(process)
     validationResult.result should matchPattern { case Valid(_) =>
     }
   }
@@ -624,7 +594,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
           .processorEnd("stringService", "stringService", "stringParam" -> "''")
       )
 
-    val validationResult = validator.validate(process)
+    val validationResult = validate(process)
 
     validationResult.result.isValid shouldBe true
   }
@@ -645,7 +615,7 @@ class CustomNodeValidationSpec extends AnyFunSuite with Matchers with OptionValu
           .join("join1", "noBranchParameters", None, List())
           .emptySink("end", "dummySink")
       )
-    val validationResult = validator.validate(process)
+    val validationResult = validate(process)
 
     validationResult.result shouldBe Validated
       .invalid(CustomNodeError("join1", "Validation contexts do not match", Option.empty))

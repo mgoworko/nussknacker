@@ -6,8 +6,8 @@ import org.apache.avro.{AvroRuntimeException, Schema}
 import org.scalatest.BeforeAndAfter
 import pl.touk.nussknacker.engine.api.validation.ValidationMode
 import pl.touk.nussknacker.engine.graph.expression
-import pl.touk.nussknacker.engine.process.compiler.FlinkProcessCompiler
-import pl.touk.nussknacker.engine.process.registrar.FlinkProcessRegistrar
+import pl.touk.nussknacker.engine.kafka.source.InputMeta
+import pl.touk.nussknacker.engine.process.helpers.TestResultsHolder
 import pl.touk.nussknacker.engine.schemedkafka.KafkaAvroIntegrationMockSchemaRegistry.schemaRegistryMockClient
 import pl.touk.nussknacker.engine.schemedkafka.encode.BestEffortAvroEncoder
 import pl.touk.nussknacker.engine.schemedkafka.helpers.KafkaAvroSpecMixin
@@ -21,6 +21,8 @@ import pl.touk.nussknacker.engine.testing.LocalModelData
 import scala.jdk.CollectionConverters._
 
 private object SinkValueEditorWithAvroPayloadIntegrationTest {
+
+  private val sinkForInputMetaResultsHolder = new TestResultsHolder[InputMeta[_]]
 
   val avroEncoder = BestEffortAvroEncoder(ValidationMode.strict)
 
@@ -94,10 +96,11 @@ class SinkValueEditorWithAvroPayloadIntegrationTest extends KafkaAvroSpecMixin w
 
   private var topicConfigs: Map[String, TopicConfig] = Map.empty
 
-  private lazy val processConfigCreator: KafkaAvroTestProcessConfigCreator = new KafkaAvroTestProcessConfigCreator {
-    override protected def schemaRegistryClientFactory =
-      MockSchemaRegistryClientFactory.confluentBased(schemaRegistryMockClient)
-  }
+  private lazy val processConfigCreator: KafkaAvroTestProcessConfigCreator =
+    new KafkaAvroTestProcessConfigCreator(sinkForInputMetaResultsHolder) {
+      override protected def schemaRegistryClientFactory =
+        MockSchemaRegistryClientFactory.confluentBased(schemaRegistryMockClient)
+    }
 
   override protected def schemaRegistryClient: SchemaRegistryClient = schemaRegistryMockClient
 
@@ -106,8 +109,7 @@ class SinkValueEditorWithAvroPayloadIntegrationTest extends KafkaAvroSpecMixin w
 
   override protected def beforeAll(): Unit = {
     super.beforeAll()
-    val modelData = LocalModelData(config, processConfigCreator)
-    registrar = FlinkProcessRegistrar(new FlinkProcessCompiler(modelData), executionConfigPreparerChain(modelData))
+    modelData = LocalModelData(config, List.empty, configCreator = processConfigCreator)
     topicSchemas.foreach { case (topicName, schema) =>
       topicConfigs = topicConfigs + (topicName -> createAndRegisterTopicConfig(topicName, schema))
     }
@@ -125,7 +127,7 @@ class SinkValueEditorWithAvroPayloadIntegrationTest extends KafkaAvroSpecMixin w
     )
     val process = createAvroProcess(sourceParam, sinkParam)
 
-    runAndVerifyResult(process, topicConfig, event = MyRecord.record, expected = MyRecord.record)
+    runAndVerifyResultSingleEvent(process, topicConfig, event = MyRecord.record, expected = MyRecord.record)
   }
 
   test("primitive at top level") {
@@ -134,7 +136,7 @@ class SinkValueEditorWithAvroPayloadIntegrationTest extends KafkaAvroSpecMixin w
     val sinkParam   = UniversalSinkParam(topicConfig, ExistingSchemaVersion(1), "42L", validationMode = None)
     val process     = createAvroProcess(sourceParam, sinkParam)
     val encoded     = encode(42L, topicSchemas("long"))
-    runAndVerifyResult(process, topicConfig, event = encoded, expected = encoded)
+    runAndVerifyResultSingleEvent(process, topicConfig, event = encoded, expected = encoded)
   }
 
   test("array at top level") {
@@ -143,7 +145,7 @@ class SinkValueEditorWithAvroPayloadIntegrationTest extends KafkaAvroSpecMixin w
     val sinkParam   = UniversalSinkParam(topicConfig, ExistingSchemaVersion(1), "{42L}")
     val process     = createAvroProcess(sourceParam, sinkParam)
     val encoded     = encode(new NonRecordContainer(topicSchemas("array"), List(42L).asJava), topicSchemas("array"))
-    runAndVerifyResult(process, topicConfig, event = encoded, expected = List(42L).asJava)
+    runAndVerifyResultSingleEvent(process, topicConfig, event = encoded, expected = List(42L).asJava)
   }
 
 }

@@ -6,12 +6,12 @@ import org.springframework.expression.common.TemplateParserContext
 import org.springframework.expression.spel.ast._
 import org.springframework.expression.spel.standard.{SpelExpression => SpringSpelExpression}
 import org.springframework.expression.spel.{SpelNode, SpelParserConfiguration}
-import pl.touk.nussknacker.engine.TypeDefinitionSet
 import pl.touk.nussknacker.engine.api.context.ValidationContext
 import pl.touk.nussknacker.engine.api.dict.UiDictServices
 import pl.touk.nussknacker.engine.api.typed.typing._
-import pl.touk.nussknacker.engine.definition.ProcessDefinitionExtractor.ExpressionDefinition
-import pl.touk.nussknacker.engine.definition.TypeInfos.ClazzDefinition
+import pl.touk.nussknacker.engine.api.validation.Validations.isVariableNameValid
+import pl.touk.nussknacker.engine.definition.clazz.{ClassDefinition, ClassDefinitionSet}
+import pl.touk.nussknacker.engine.definition.globalvariables.ExpressionConfigDefinition
 import pl.touk.nussknacker.engine.dict.LabelsDictTyper
 import pl.touk.nussknacker.engine.graph.expression.Expression
 import pl.touk.nussknacker.engine.spel.Typer.TypingResultWithContext
@@ -22,14 +22,14 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Try}
 
 class SpelExpressionSuggester(
-    expressionDefinition: ExpressionDefinition[_],
-    typeDefinitions: TypeDefinitionSet,
+    expressionConfig: ExpressionConfigDefinition,
+    clssDefinitions: ClassDefinitionSet,
     uiDictServices: UiDictServices,
     classLoader: ClassLoader
 ) {
   private val successfulNil = Future.successful[List[ExpressionSuggestion]](Nil)
   private val typer =
-    Typer.default(classLoader, expressionDefinition, new LabelsDictTyper(uiDictServices.dictRegistry), typeDefinitions)
+    Typer.default(classLoader, expressionConfig, new LabelsDictTyper(uiDictServices.dictRegistry), clssDefinitions)
   private val nuSpelNodeParser = new NuSpelNodeParser(typer)
   private val dictQueryService = uiDictServices.dictQueryService
 
@@ -63,38 +63,62 @@ class SpelExpressionSuggester(
         nodeInPosition: NuSpelNode,
         p: PropertyOrFieldReference
     ): Future[Iterable[ExpressionSuggestion]] = {
-      val typedPrevNode = nodeInPosition.prevNode().flatMap(_.typingResultWithContext)
-      typedPrevNode
+
+      val nuSpelNodeParentOpt = nodeInPosition.parent.map(_.node)
+      val parentIsIndexer     = nuSpelNodeParentOpt.exists(_.spelNode.isInstanceOf[Indexer])
+
+      val typedNode = nuSpelNodeParentOpt.flatMap {
+        case nuSpelNodeParent if parentIsIndexer =>
+          nuSpelNodeParent.prevNode().flatMap(_.typingResultWithContext)
+        case _ =>
+          nodeInPosition.prevNode().flatMap(_.typingResultWithContext)
+      }
+
+      typedNode
         .collect {
           case TypingResultWithContext(tc: TypedClass, staticContext) =>
             Future.successful(
-              typeDefinitions.get(tc.klass).map(c => filterClassMethods(c, p.getName, staticContext)).getOrElse(Nil)
+              clssDefinitions.get(tc.klass).map(c => filterClassMethods(c, p.getName, staticContext)).getOrElse(Nil)
             )
           case TypingResultWithContext(to: TypedObjectWithValue, staticContext) =>
             Future.successful(
-              typeDefinitions
+              clssDefinitions
                 .get(to.underlying.klass)
                 .map(c => filterClassMethods(c, p.getName, staticContext))
                 .getOrElse(Nil)
             )
           case TypingResultWithContext(to: TypedObjectTypingResult, _) =>
-            val suggestionsFromFields = filterMapByName(to.fields, p.getName).toList.map {
-              case (methodName, clazzRef) => ExpressionSuggestion(methodName, clazzRef, fromClass = false, None, Nil)
+            def filterIllegalIdentifierAfterDot(name: String) = {
+              isVariableNameValid(name)
             }
-            val suggestionsFromClass = typeDefinitions
+            val collectSuggestionsFromClass = parentIsIndexer
+            val suggestionsFromFields = filterMapByName(to.fields, p.getName).toList
+              .filter { case (fieldName, _) =>
+                // TODO: signal to user that some values have been filtered
+                filterIllegalIdentifierAfterDot(fieldName)
+              }
+              .map { case (methodName, clazzRef) =>
+                ExpressionSuggestion(methodName, clazzRef, fromClass = false, None, Nil)
+              }
+            val suggestionsFromClass = clssDefinitions
               .get(to.objType.klass)
-              .map(c =>
-                filterClassMethods(c, p.getName, staticContext = false, fromClass = suggestionsFromFields.nonEmpty)
-              )
+              .map(c => filterClassMethods(c, p.getName, staticContext = false, fromClass = true))
               .getOrElse(Nil)
-            Future.successful(suggestionsFromFields ++ suggestionsFromClass)
+            val applicableSuggestions = if (collectSuggestionsFromClass) {
+              suggestionsFromFields
+            } else {
+              suggestionsFromFields ++ suggestionsFromClass
+            }
+            Future.successful(applicableSuggestions)
           case TypingResultWithContext(tu: TypedUnion, staticContext) =>
             Future.successful(
               tu.possibleTypes
                 .map(_.objType.klass)
+                .toList
                 .flatMap(klass =>
-                  typeDefinitions.get(klass).map(c => filterClassMethods(c, p.getName, staticContext)).getOrElse(Nil)
+                  clssDefinitions.get(klass).map(c => filterClassMethods(c, p.getName, staticContext)).getOrElse(Nil)
                 )
+                .distinct
             )
           case TypingResultWithContext(td: TypedDict, _) =>
             dictQueryService
@@ -106,7 +130,7 @@ class SpelExpressionSuggester(
     }
 
     def filterClassMethods(
-        classDefinition: ClazzDefinition,
+        classDefinition: ClassDefinition,
         name: String,
         staticContext: Boolean,
         fromClass: Boolean = false
@@ -115,7 +139,6 @@ class SpelExpressionSuggester(
 
       methods.values.flatten.map { method =>
         // TODO: present all overloaded methods, not only one with most parameters.
-        //  Current logic here is the same as in UIProcessObjectsFactory
         val signature = method.signatures.toList.maxBy(_.parametersToList.length)
         ExpressionSuggestion(
           method.name,
@@ -174,9 +197,13 @@ class SpelExpressionSuggester(
                     dictQueryService
                       .queryEntriesByLabel(td.dictId, s.getLiteralValue.getValue.toString)
                       .map(
-                        _.map(list => list.map(e => ExpressionSuggestion(e.label, td, fromClass = false, None, Nil)))
+                        _.map(list =>
+                          list.map(e => ExpressionSuggestion(e.label, td.valueType, fromClass = false, None, Nil))
+                        )
                       )
                       .getOrElse(successfulNil)
+                  case TypedObjectTypingResult(fields, _, _) =>
+                    Future.successful(fields.map(f => ExpressionSuggestion(f._1, f._2, fromClass = false, None, Nil)))
                   case _ => successfulNil
                 }
               case _ => successfulNil
@@ -196,7 +223,7 @@ class SpelExpressionSuggester(
                 } else {
                   q.toStringAST
                 }
-                typeDefinitions.typeDefinitions.keys
+                clssDefinitions.classDefinitionsMap.keys
                   .filter { klass =>
                     klass.getName.startsWith(name)
                   }
@@ -232,10 +259,10 @@ class SpelExpressionSuggester(
       case tc: SingleTypingResult if tc.objType.canBeSubclassOf(Typed[java.util.Collection[_]]) =>
         tc.objType.params.headOption.getOrElse(Unknown)
       case tc: SingleTypingResult if tc.objType.canBeSubclassOf(Typed[java.util.Map[_, _]]) =>
-        TypedObjectTypingResult(
-          List(
-            ("key", tc.objType.params.headOption.getOrElse(Unknown)),
-            ("value", tc.objType.params.drop(1).headOption.getOrElse(Unknown))
+        Typed.record(
+          Map(
+            "key"   -> tc.objType.params.headOption.getOrElse(Unknown),
+            "value" -> tc.objType.params.drop(1).headOption.getOrElse(Unknown)
           )
         )
       case tc: SingleTypingResult if tc.objType.klass.isArray =>

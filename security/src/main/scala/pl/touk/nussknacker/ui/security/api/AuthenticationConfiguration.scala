@@ -11,7 +11,9 @@ trait AuthenticationConfiguration {
   def name: String
   def usersFile: URI
 
-  val userConfig: Config = ConfigFactoryExt.parseUri(usersFile, getClass.getClassLoader)
+  def anonymousUserRole: Option[String]
+
+  lazy val userConfig: Config = ConfigFactoryExt.parseUri(usersFile, getClass.getClassLoader)
 
   lazy val users: List[ConfigUser] = AuthenticationConfiguration
     .getUsers(userConfig)
@@ -53,6 +55,8 @@ object AuthenticationConfiguration {
       isAdmin: Boolean = false,
       categories: List[String] = List.empty,
       permissions: List[Permission] = List.empty,
+      // Currently we don't use global permissions in our code, but it is possible to configure TopTab.requiredPermission
+      // which can hide a tab on FE side when smb doesn't have some specific global permission. It is used in external project
       globalPermissions: List[GlobalPermission] = List.empty
   )
 

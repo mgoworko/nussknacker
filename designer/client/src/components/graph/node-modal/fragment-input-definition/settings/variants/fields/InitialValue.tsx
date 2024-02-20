@@ -1,46 +1,36 @@
 import React from "react";
-import { SettingLabelStyled, SettingRow } from "./StyledSettingsComponnets";
+import { SettingLabelStyled } from "./StyledSettingsComponnets";
 import { useTranslation } from "react-i18next";
-import { onChangeType, FragmentInputParameter, FixedValuesOption, FieldName } from "../../../item";
+import { onChangeType, FragmentInputParameter, FixedValuesOption } from "../../../item";
 import { Option, TypeSelect } from "../../../TypeSelect";
 import { ExpressionLang } from "../../../../editors/expression/types";
 import { EditableEditor } from "../../../../editors/EditableEditor";
 import { VariableTypes } from "../../../../../../../types";
-import { Error, errorValidator } from "../../../../editors/Validators";
+import { FieldError } from "../../../../editors/Validators";
 import { EditorType } from "../../../../editors/expression/Editor";
+import { FormControl } from "@mui/material";
 
 interface InitialValue {
     item: FragmentInputParameter;
     path: string;
     onChange: (path: string, value: onChangeType) => void;
-    fieldName: FieldName;
     options?: FixedValuesOption[];
     readOnly: boolean;
     variableTypes: VariableTypes;
-    fieldsErrors: Error[];
+    fieldErrors: FieldError[];
 }
 
-export default function InitialValue({
-    onChange,
-    fieldName,
-    item,
-    path,
-    options,
-    readOnly,
-    variableTypes,
-    fieldsErrors = [],
-}: InitialValue) {
+export default function InitialValue({ onChange, item, path, options, readOnly, variableTypes, fieldErrors }: InitialValue) {
     const { t } = useTranslation();
 
     const emptyOption = { label: "", value: "" };
     const optionsToDisplay: Option[] = [emptyOption, ...(options ?? []).map(({ label }) => ({ label, value: label }))];
 
     return (
-        <SettingRow>
+        <FormControl>
             <SettingLabelStyled>{t("fragment.initialValue", "Initial value:")}</SettingLabelStyled>
             {options ? (
                 <TypeSelect
-                    fieldName={fieldName}
                     onChange={(value) => {
                         const selectedOption = options.find((option) => option.label === value);
                         onChange(`${path}.initialValue`, selectedOption);
@@ -48,21 +38,20 @@ export default function InitialValue({
                     value={optionsToDisplay.find((option) => option.value === item?.initialValue?.label)}
                     options={optionsToDisplay}
                     readOnly={readOnly}
-                    fieldErrors={fieldsErrors}
                     placeholder={""}
+                    fieldErrors={fieldErrors}
                 />
             ) : (
                 <EditableEditor
-                    fieldName={fieldName}
                     expressionObj={{ language: ExpressionLang.SpEL, expression: item?.initialValue?.label }}
                     onValueChange={(value) => onChange(`${path}.initialValue`, { label: value, expression: value })}
                     variableTypes={variableTypes}
                     readOnly={readOnly}
-                    errors={fieldsErrors}
-                    param={{ validators: [errorValidator], editor: { type: EditorType.RAW_PARAMETER_EDITOR } }}
+                    param={{ editor: { type: EditorType.RAW_PARAMETER_EDITOR } }}
                     showValidation
+                    fieldErrors={fieldErrors}
                 />
             )}
-        </SettingRow>
+        </FormControl>
     );
 }

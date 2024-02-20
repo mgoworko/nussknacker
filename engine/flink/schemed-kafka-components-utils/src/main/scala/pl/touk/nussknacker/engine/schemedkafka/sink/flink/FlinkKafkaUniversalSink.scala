@@ -68,7 +68,7 @@ class FlinkKafkaUniversalSink(
     override def map(ctx: ValueWithContext[KeyedValue[AnyRef, AnyRef]]): KeyedValue[AnyRef, AnyRef] = {
       ctx.value.mapValue { data =>
         exceptionHandler
-          .handling(Some(NodeComponentInfo(nodeId, "flinkKafkaAvroSink", ComponentType.Sink)), ctx.context) {
+          .handling(Some(NodeComponentInfo(nodeId, ComponentType.Sink, "flinkKafkaAvroSink")), ctx.context) {
             val encode = schemaSupportDispatcher
               .forSchemaType(schema.getParsedSchema.schemaType())
               .formValueEncoder(schema.getParsedSchema, validationMode)

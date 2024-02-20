@@ -1,34 +1,37 @@
 package pl.touk.nussknacker.engine.process.registrar
 
+import cats.effect.IO
 import org.apache.flink.api.common.functions.RichFlatMapFunction
 import org.apache.flink.util.Collector
 import pl.touk.nussknacker.engine.InterpretationResult
 import pl.touk.nussknacker.engine.Interpreter.FutureShape
+import pl.touk.nussknacker.engine.api.Context
 import pl.touk.nussknacker.engine.api.context.ValidationContext
 import pl.touk.nussknacker.engine.api.exception.NuExceptionInfo
-import pl.touk.nussknacker.engine.api.Context
+import pl.touk.nussknacker.engine.api.process.ServiceExecutionContext
 import pl.touk.nussknacker.engine.graph.node.NodeData
 import pl.touk.nussknacker.engine.process.ProcessPartFunction
 import pl.touk.nussknacker.engine.process.compiler.FlinkProcessCompilerData
 import pl.touk.nussknacker.engine.splittedgraph.splittednode.SplittedNode
-import pl.touk.nussknacker.engine.util.SynchronousExecutionContext
+import pl.touk.nussknacker.engine.util.SynchronousExecutionContextAndIORuntime
+import pl.touk.nussknacker.engine.util.SynchronousExecutionContextAndIORuntime.syncEc
 
 import java.util.concurrent.TimeoutException
-import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.{Await, Future}
 import scala.util.control.NonFatal
 
 private[registrar] class SyncInterpretationFunction(
-    val compiledProcessWithDepsProvider: ClassLoader => FlinkProcessCompilerData,
+    val compilerDataForClassloader: ClassLoader => FlinkProcessCompilerData,
     val node: SplittedNode[_ <: NodeData],
     validationContext: ValidationContext,
     useIOMonad: Boolean
 ) extends RichFlatMapFunction[Context, InterpretationResult]
     with ProcessPartFunction {
 
-  private lazy implicit val ec: ExecutionContext = SynchronousExecutionContext.ctx
-  private lazy val compiledNode                  = compiledProcessWithDeps.compileSubPart(node, validationContext)
+  private lazy val compiledNode = compilerData.compileSubPart(node, validationContext)
+  private lazy val serviceExecutionContext: ServiceExecutionContext = ServiceExecutionContext(syncEc)
 
-  import compiledProcessWithDeps._
+  import SynchronousExecutionContextAndIORuntime._
 
   override def flatMap(input: Context, collector: Collector[InterpretationResult]): Unit = {
     (try {
@@ -43,16 +46,24 @@ private[registrar] class SyncInterpretationFunction(
     }
   }
 
-  private def runInterpreter(input: Context): List[Either[InterpretationResult, NuExceptionInfo[_ <: Throwable]]] = {
+  private def runInterpreter(
+      input: Context
+  ): List[Either[InterpretationResult, NuExceptionInfo[_ <: Throwable]]] = {
     // we leave switch to be able to return to Future if IO has some flaws...
     if (useIOMonad) {
-      interpreter.interpret(compiledNode, metaData, input).unsafeRunTimed(processTimeout) match {
+      compilerData.interpreter
+        .interpret[IO](compiledNode, compilerData.metaData, input, serviceExecutionContext)
+        .unsafeRunTimed(compilerData.processTimeout) match {
         case Some(result) => result
-        case None         => throw new TimeoutException(s"Interpreter is running too long (timeout: $processTimeout)")
+        case None =>
+          throw new TimeoutException(s"Interpreter is running too long (timeout: ${compilerData.processTimeout})")
       }
     } else {
-      implicit val futureShape: FutureShape = new FutureShape()
-      Await.result(interpreter.interpret[Future](compiledNode, metaData, input), processTimeout)
+      Await.result(
+        awaitable = compilerData.interpreter
+          .interpret[Future](compiledNode, compilerData.metaData, input, serviceExecutionContext),
+        atMost = compilerData.processTimeout
+      )
     }
   }
 

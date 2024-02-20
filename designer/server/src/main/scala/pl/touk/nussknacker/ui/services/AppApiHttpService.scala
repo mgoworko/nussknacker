@@ -3,19 +3,17 @@ package pl.touk.nussknacker.ui.services
 import com.typesafe.config.{Config, ConfigRenderOptions}
 import com.typesafe.scalalogging.LazyLogging
 import io.circe.parser
-import pl.touk.nussknacker.engine.ModelData
 import pl.touk.nussknacker.engine.api.deployment.ProcessState
 import pl.touk.nussknacker.engine.api.deployment.simple.SimpleStateStatus.ProblemStateStatus
-import pl.touk.nussknacker.engine.api.process.ProcessName
-import pl.touk.nussknacker.engine.util.Implicits.RichScalaMap
+import pl.touk.nussknacker.engine.api.process.{ProcessName, ProcessingType}
+import pl.touk.nussknacker.engine.util.Implicits.RichTupleList
 import pl.touk.nussknacker.engine.version.BuildInfo
-import pl.touk.nussknacker.engine.api.process.ProcessingType
-import pl.touk.nussknacker.ui.api.AppApiEndpoints.Dtos._
 import pl.touk.nussknacker.ui.api.AppApiEndpoints
-import pl.touk.nussknacker.ui.process.ProcessService.{FetchScenarioGraph, GetScenarioWithDetailsOptions}
-import pl.touk.nussknacker.ui.process.processingtypedata.{ProcessingTypeDataProvider, ProcessingTypeDataReload}
-import pl.touk.nussknacker.ui.process.{ProcessCategoryService, ProcessService, ScenarioQuery, UserCategoryService}
-import pl.touk.nussknacker.ui.security.api.{AuthenticationResources, LoggedUser}
+import pl.touk.nussknacker.ui.api.AppApiEndpoints.Dtos._
+import pl.touk.nussknacker.ui.process.ProcessService.GetScenarioWithDetailsOptions
+import pl.touk.nussknacker.ui.process.processingtype.{ProcessingTypeDataProvider, ProcessingTypeDataReload}
+import pl.touk.nussknacker.ui.process.{ProcessService, ScenarioQuery}
+import pl.touk.nussknacker.ui.security.api.{AuthenticationResources, LoggedUser, NussknackerInternalUser}
 
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.control.NonFatal
@@ -24,12 +22,12 @@ class AppApiHttpService(
     config: Config,
     authenticator: AuthenticationResources,
     processingTypeDataReloader: ProcessingTypeDataReload,
-    modelData: ProcessingTypeDataProvider[ModelData, _],
+    modelBuildInfos: ProcessingTypeDataProvider[Map[String, String], _],
+    categories: ProcessingTypeDataProvider[String, _],
     processService: ProcessService,
-    getProcessCategoryService: () => ProcessCategoryService,
     shouldExposeConfig: Boolean
 )(implicit executionContext: ExecutionContext)
-    extends BaseHttpService(config, getProcessCategoryService, authenticator)
+    extends BaseHttpService(config, authenticator)
     with LazyLogging {
 
   private val appApiEndpoints = new AppApiEndpoints(authenticator.authenticationMethod())
@@ -97,14 +95,16 @@ class AppApiHttpService(
         Future {
           import net.ceedubs.ficus.Ficus._
           val configuredBuildInfo = config.getAs[Map[String, String]]("globalBuildInfo")
-          val modelDataInfo: Map[ProcessingType, Map[String, String]] =
-            modelData.all.mapValuesNow(_.configCreator.buildInfo())
+          // TODO: Warning, here is a little security leak. Everyone can discover configured processing types.
+          //       We should consider adding an authorization of access rights to this data.
+          val modelBuildInfo: Map[ProcessingType, Map[String, String]] =
+            modelBuildInfos.all(NussknackerInternalUser.instance)
           BuildInfoDto(
             BuildInfo.name,
             BuildInfo.gitCommit,
             BuildInfo.buildTime,
             BuildInfo.version,
-            modelDataInfo,
+            modelBuildInfo,
             configuredBuildInfo
           )
         }
@@ -129,12 +129,20 @@ class AppApiHttpService(
   }
 
   expose {
+    // This endpoint is used only by external project
+    // TODO: We should remove this endpoint after we fully switch to processing modes - see ConfigProcessCategoryService.checkCategoryToProcessingTypeMappingAmbiguity
     appApiEndpoints.userCategoriesWithProcessingTypesEndpoint
       .serverSecurityLogic(authorizeKnownUser[Unit])
       .serverLogicSuccess { loggedUser => _ =>
         Future {
-          val userCategoryService = new UserCategoryService(getProcessCategoryService())
-          UserCategoriesWithProcessingTypesDto(userCategoryService.getUserCategoriesWithType(loggedUser))
+          val processingTypeByCategory = categories
+            .all(loggedUser)
+            .toList
+            .map { case (processingType, category) =>
+              category -> processingType
+            }
+            .toMapCheckingDuplicates
+          UserCategoriesWithProcessingTypesDto(processingTypeByCategory)
         }
       }
   }
@@ -151,7 +159,7 @@ class AppApiHttpService(
 
   private def problemStateByProcessName(implicit user: LoggedUser): Future[Map[ProcessName, ProcessState]] = {
     for {
-      processes <- processService.getProcessesWithDetails(
+      processes <- processService.getLatestProcessesWithDetails(
         ScenarioQuery.deployed,
         GetScenarioWithDetailsOptions.detailsOnly.copy(fetchState = true)
       )
@@ -165,14 +173,14 @@ class AppApiHttpService(
 
   private def processesWithValidationErrors(implicit user: LoggedUser): Future[List[String]] = {
     processService
-      .getProcessesWithDetails(
+      .getLatestProcessesWithDetails(
         ScenarioQuery.unarchivedProcesses,
         GetScenarioWithDetailsOptions.withsScenarioGraph.withValidation
       )
       .map { processes =>
         processes
           .filterNot(_.validationResultUnsafe.errors.isEmpty)
-          .map(_.id)
+          .map(_.name.value)
       }
   }
 

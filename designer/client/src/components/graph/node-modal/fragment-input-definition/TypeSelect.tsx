@@ -2,10 +2,9 @@ import React, { useCallback, useState } from "react";
 import Select from "react-select";
 import { NodeValue } from "../node";
 import { selectStyled } from "../../../../stylesheets/SelectStyled";
-import { useTheme } from "@mui/material";
+import { Box, useTheme } from "@mui/material";
 import ValidationLabels from "../../../modals/ValidationLabels";
-import { errorValidator, Error } from "../editors/Validators";
-import { FieldName } from "./item";
+import { FieldError } from "../editors/Validators";
 
 export interface Option {
     value: string;
@@ -19,8 +18,7 @@ interface RowSelectProps {
     isMarked?: boolean;
     value: Option;
     placeholder?: string;
-    fieldErrors?: Error[];
-    fieldName?: FieldName;
+    fieldErrors: FieldError[];
 }
 
 function useCaptureEsc() {
@@ -39,23 +37,14 @@ function useCaptureEsc() {
     return { setCaptureEsc, preventEsc };
 }
 
-export function TypeSelect({
-    isMarked,
-    options,
-    readOnly,
-    value,
-    onChange,
-    placeholder,
-    fieldErrors,
-    fieldName,
-}: RowSelectProps): JSX.Element {
+export function TypeSelect({ isMarked, options, readOnly, value, onChange, placeholder, fieldErrors }: RowSelectProps): JSX.Element {
     const { setCaptureEsc, preventEsc } = useCaptureEsc();
     const theme = useTheme();
 
     const { control, input, valueContainer, singleValue, menuPortal, menu, menuList, menuOption } = selectStyled(theme);
 
     return (
-        <NodeValue className="field" marked={isMarked} onKeyDown={preventEsc}>
+        <Box component={NodeValue} width={"100%"} className="field" marked={isMarked} onKeyDown={preventEsc}>
             <Select
                 aria-label={"type-select"}
                 className="node-value node-value-select node-value-type-select"
@@ -91,7 +80,7 @@ export function TypeSelect({
                     singleValue: (base, props) => ({ ...singleValue(base, props.isDisabled) }),
                 }}
             />
-            <ValidationLabels validators={[errorValidator(fieldErrors, fieldName)]} values={[]} />
-        </NodeValue>
+            <ValidationLabels fieldErrors={fieldErrors} />
+        </Box>
     );
 }

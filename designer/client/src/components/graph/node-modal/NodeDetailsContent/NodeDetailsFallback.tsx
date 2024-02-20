@@ -1,7 +1,6 @@
 import React from "react";
 import { NodeType, NodeValidationError } from "../../../../types";
 import { IdField } from "../IdField";
-import { NodeTableBody } from "./NodeTable";
 
 export function NodeDetailsFallback(props: {
     node: NodeType;
@@ -9,13 +8,11 @@ export function NodeDetailsFallback(props: {
     setProperty: <K extends keyof NodeType>(property: K, newValue: NodeType[K], defaultValue?: NodeType[K]) => void;
     isEditMode?: boolean;
     showValidation?: boolean;
-    fieldErrors?: NodeValidationError[];
+    errors: NodeValidationError[];
 }): JSX.Element {
     return (
         <>
-            <NodeTableBody>
-                <IdField {...props} errors={props.fieldErrors} />
-            </NodeTableBody>
+            <IdField {...props} errors={props.errors} />
             <span>Node type not known.</span>
             <pre>{JSON.stringify(props.node, null, 2)}</pre>
         </>

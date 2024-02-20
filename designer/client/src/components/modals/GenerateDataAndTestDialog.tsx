@@ -2,11 +2,13 @@ import { css, cx } from "@emotion/css";
 import { WindowButtonProps, WindowContentProps } from "@touk/window-manager";
 import React, { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSelector, useDispatch } from "react-redux";
-import { getProcessId, getProcessToDisplay } from "../../reducers/selectors/graph";
+import { useDispatch, useSelector } from "react-redux";
+import { getScenarioGraph } from "../../reducers/selectors/graph";
 import { getFeatureSettings } from "../../reducers/selectors/settings";
 import { PromptContent } from "../../windowManager";
 import {
+    extendErrors,
+    getValidationErrorsForField,
     literalIntegerValueValidator,
     mandatoryValueValidator,
     maximalNumberValidator,
@@ -15,12 +17,15 @@ import {
 import { NodeInput } from "../withFocus";
 import ValidationLabels from "./ValidationLabels";
 import { testScenarioWithGeneratedData } from "../../actions/nk/displayTestResults";
+import { isEmpty } from "lodash";
+import { getProcessName } from "../graph/node-modal/NodeDetailsContent/selectors";
+import { Typography } from "@mui/material";
 
 function GenerateDataAndTestDialog(props: WindowContentProps): JSX.Element {
     const { t } = useTranslation();
     const dispatch = useDispatch();
-    const processId = useSelector(getProcessId);
-    const processToDisplay = useSelector(getProcessToDisplay);
+    const processName = useSelector(getProcessName);
+    const scenarioGraph = useSelector(getScenarioGraph);
     const maxSize = useSelector(getFeatureSettings).testDataSettings.maxSamplesCount;
 
     const [{ testSampleSize }, setState] = useState({
@@ -28,12 +33,13 @@ function GenerateDataAndTestDialog(props: WindowContentProps): JSX.Element {
     });
 
     const confirmAction = useCallback(async () => {
-        await dispatch(testScenarioWithGeneratedData(processId, testSampleSize, processToDisplay));
+        await dispatch(testScenarioWithGeneratedData(testSampleSize, processName, scenarioGraph));
         props.close();
-    }, [processId, processToDisplay, props, testSampleSize]);
+    }, [dispatch, processName, scenarioGraph, props, testSampleSize]);
 
     const validators = [literalIntegerValueValidator, minimalNumberValidator(0), maximalNumberValidator(maxSize), mandatoryValueValidator];
-    const isValid = validators.every((v) => v.isValid(testSampleSize));
+    const errors = extendErrors([], testSampleSize, "testData", validators);
+    const isValid = isEmpty(errors);
 
     const buttons: WindowButtonProps[] = useMemo(
         () => [
@@ -46,7 +52,7 @@ function GenerateDataAndTestDialog(props: WindowContentProps): JSX.Element {
     return (
         <PromptContent {...props} buttons={buttons}>
             <div className={cx("modalContentDark", css({ minWidth: 400 }))}>
-                <h3>{t("generate-and-test.title", "Generate scenario test data and run tests")}</h3>
+                <Typography variant={"h3"}>{t("generate-and-test.title", "Generate scenario test data and run tests")}</Typography>
                 <NodeInput
                     value={testSampleSize}
                     onChange={(event) => setState({ testSampleSize: event.target.value })}
@@ -55,7 +61,7 @@ function GenerateDataAndTestDialog(props: WindowContentProps): JSX.Element {
                     })}
                     autoFocus
                 />
-                <ValidationLabels validators={validators} values={[testSampleSize]} />
+                <ValidationLabels fieldErrors={getValidationErrorsForField(errors, "testData")} />
             </div>
         </PromptContent>
     );

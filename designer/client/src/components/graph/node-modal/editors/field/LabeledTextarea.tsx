@@ -3,19 +3,19 @@ import React from "react";
 import ValidationLabels from "../../../../modals/ValidationLabels";
 import { TextAreaWithFocus, TextAreaWithFocusProps } from "../../../../withFocus";
 import { LabeledInputProps } from "./LabeledInput";
-import { NodeRow } from "../../NodeDetailsContent/NodeStyled";
+import { FormControl } from "@mui/material";
 
 export interface LabeledTextareaProps
-    extends Pick<LabeledInputProps, "value" | "isMarked" | "children" | "showValidation" | "validators">,
+    extends Pick<LabeledInputProps, "value" | "isMarked" | "children" | "showValidation" | "fieldErrors">,
         Pick<TextAreaWithFocusProps, "className" | "autoFocus" | "onChange" | "readOnly" | "cols" | "rows"> {}
 
 export default function LabeledTextarea(props: LabeledTextareaProps): JSX.Element {
-    const { value, className, isMarked, rows = 1, cols = 50, children, showValidation, validators, ...passProps } = props;
+    const { value, className, isMarked, rows = 1, cols = 50, children, showValidation, fieldErrors, ...passProps } = props;
 
     const lineEndPattern = /\r\n|\r|\n/;
 
     return (
-        <NodeRow>
+        <FormControl>
             {children}
             <div className={`node-value${isMarked ? " marked" : ""}`}>
                 <TextAreaWithFocus
@@ -25,8 +25,8 @@ export default function LabeledTextarea(props: LabeledTextareaProps): JSX.Elemen
                     className={className}
                     value={value}
                 />
-                {showValidation && <ValidationLabels validators={validators} values={[value]} />}
+                {showValidation && <ValidationLabels fieldErrors={fieldErrors} />}
             </div>
-        </NodeRow>
+        </FormControl>
     );
 }

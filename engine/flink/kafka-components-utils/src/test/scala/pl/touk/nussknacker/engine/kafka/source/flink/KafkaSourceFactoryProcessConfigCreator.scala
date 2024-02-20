@@ -4,62 +4,59 @@ import io.circe.{Decoder, Encoder}
 import org.apache.kafka.common.serialization.StringDeserializer
 import pl.touk.nussknacker.engine.api.CustomStreamTransformer
 import pl.touk.nussknacker.engine.api.definition.Parameter
-import pl.touk.nussknacker.engine.api.process.{
-  EmptyProcessConfigCreator,
-  ProcessObjectDependencies,
-  SinkFactory,
-  SourceFactory,
-  WithCategories
-}
-import pl.touk.nussknacker.engine.kafka.KafkaConfig
+import pl.touk.nussknacker.engine.api.process._
 import pl.touk.nussknacker.engine.kafka.consumerrecord.ConsumerRecordToJsonFormatterFactory
-import pl.touk.nussknacker.engine.kafka.generic.sources.GenericJsonSourceFactory
-import pl.touk.nussknacker.engine.kafka.source.{InputMeta, KafkaSourceFactory}
 import pl.touk.nussknacker.engine.kafka.source.flink.KafkaSourceFactoryMixin.{
   SampleKey,
   SampleValue,
   createDeserializer
 }
-import pl.touk.nussknacker.engine.kafka.source.flink.KafkaSourceFactoryProcessConfigCreator._
+import pl.touk.nussknacker.engine.kafka.source.flink.KafkaSourceFactoryProcessConfigCreator.{
+  KafkaConsumerRecordSourceHelper,
+  ResultsHolders
+}
+import pl.touk.nussknacker.engine.kafka.source.{InputMeta, KafkaSourceFactory}
 import pl.touk.nussknacker.engine.process.helpers.SampleNodes.{ExtractAndTransformTimestamp, SinkForStrings}
-import pl.touk.nussknacker.engine.process.helpers.SinkForType
+import pl.touk.nussknacker.engine.process.helpers.{SinkForType, TestResultsHolder}
 
 import scala.reflect.ClassTag
 
-class KafkaSourceFactoryProcessConfigCreator extends EmptyProcessConfigCreator {
+class KafkaSourceFactoryProcessConfigCreator(resultsHolders: () => ResultsHolders) extends EmptyProcessConfigCreator {
 
   override def sourceFactories(
-      processObjectDependencies: ProcessObjectDependencies
+      modelDependencies: ProcessObjectDependencies
   ): Map[String, WithCategories[SourceFactory]] = {
-    val kafkaConfig = KafkaConfig.parseConfig(processObjectDependencies.config)
     Map(
       "kafka-jsonKeyJsonValueWithMeta" -> defaultCategory(
         KafkaConsumerRecordSourceHelper
-          .jsonKeyValueWithMeta[SampleKey, SampleValue](processObjectDependencies, kafkaConfig)
+          .jsonKeyValueWithMeta[SampleKey, SampleValue](modelDependencies)
       ),
       "kafka-jsonValueWithMeta" -> defaultCategory(
-        KafkaConsumerRecordSourceHelper.jsonValueWithMeta[SampleValue](processObjectDependencies, kafkaConfig)
+        KafkaConsumerRecordSourceHelper.jsonValueWithMeta[SampleValue](modelDependencies)
       ),
       "kafka-jsonValueWithMeta-withException" -> defaultCategory(
         KafkaConsumerRecordSourceHelper
-          .jsonValueWithMetaWithException[SampleValue](processObjectDependencies, kafkaConfig)
-      ),
-      "kafka-GenericJsonSourceFactory" -> defaultCategory(new GenericJsonSourceFactory(processObjectDependencies))
+          .jsonValueWithMetaWithException[SampleValue](modelDependencies)
+      )
     )
   }
 
   override def sinkFactories(
-      processObjectDependencies: ProcessObjectDependencies
+      modelDependencies: ProcessObjectDependencies
   ): Map[String, WithCategories[SinkFactory]] = {
     Map(
-      "sinkForStrings"          -> defaultCategory(SinkForStrings.toSinkFactory),
-      "sinkForInputMeta"        -> defaultCategory(SinkForInputMeta.toSinkFactory),
-      "sinkForSimpleJsonRecord" -> defaultCategory(SinkForSampleValue.toSinkFactory)
+      "sinkForStrings" -> defaultCategory(SinkForStrings(resultsHolders().sinkForStringsResultsHolder)),
+      "sinkForInputMeta" -> defaultCategory(
+        SinkForType[InputMeta[Any]](resultsHolders().sinkForInputMetaResultsHolder)
+      ),
+      "sinkForSimpleJsonRecord" -> defaultCategory(
+        SinkForType[SampleValue](resultsHolders().sinkForSimpleJsonRecordResultsHolder)
+      )
     )
   }
 
   override def customStreamTransformers(
-      processObjectDependencies: ProcessObjectDependencies
+      modelDependencies: ProcessObjectDependencies
   ): Map[String, WithCategories[CustomStreamTransformer]] = {
     Map("extractAndTransformTimestamp" -> defaultCategory(ExtractAndTransformTimestamp))
   }
@@ -70,13 +67,23 @@ class KafkaSourceFactoryProcessConfigCreator extends EmptyProcessConfigCreator {
 
 object KafkaSourceFactoryProcessConfigCreator {
 
-  case object SinkForSampleValue extends SinkForType[SampleValue]
+  class ResultsHolders {
+    val sinkForStringsResultsHolder: TestResultsHolder[String]               = new TestResultsHolder[String]
+    val sinkForInputMetaResultsHolder: TestResultsHolder[InputMeta[Any]]     = new TestResultsHolder[InputMeta[Any]]
+    val sinkForSimpleJsonRecordResultsHolder: TestResultsHolder[SampleValue] = new TestResultsHolder[SampleValue]
+
+    def clear(): Unit = {
+      sinkForStringsResultsHolder.clear()
+      sinkForInputMetaResultsHolder.clear()
+      sinkForSimpleJsonRecordResultsHolder.clear()
+    }
+
+  }
 
   object KafkaConsumerRecordSourceHelper {
 
     def jsonKeyValueWithMeta[K: ClassTag: Encoder: Decoder, V: ClassTag: Encoder: Decoder](
-        processObjectDependencies: ProcessObjectDependencies,
-        kafkaConfig: KafkaConfig
+        modelDependencies: ProcessObjectDependencies
     ): KafkaSourceFactory[Any, Any] = {
 
       val deserializationSchemaFactory =
@@ -85,15 +92,14 @@ object KafkaSourceFactoryProcessConfigCreator {
       val kafkaSource = new KafkaSourceFactory(
         deserializationSchemaFactory,
         formatterFactory,
-        processObjectDependencies,
+        modelDependencies,
         new FlinkKafkaSourceImplFactory(None)
       )
       kafkaSource.asInstanceOf[KafkaSourceFactory[Any, Any]]
     }
 
     def jsonValueWithMeta[V: ClassTag: Encoder: Decoder](
-        processObjectDependencies: ProcessObjectDependencies,
-        kafkaConfig: KafkaConfig
+        modelDependencies: ProcessObjectDependencies,
     ): KafkaSourceFactory[Any, Any] = {
 
       val deserializationSchemaFactory = new SampleConsumerRecordDeserializationSchemaFactory(
@@ -104,7 +110,7 @@ object KafkaSourceFactoryProcessConfigCreator {
       val kafkaSource = new KafkaSourceFactory(
         deserializationSchemaFactory,
         formatterFactory,
-        processObjectDependencies,
+        modelDependencies,
         new FlinkKafkaSourceImplFactory(None)
       )
       kafkaSource.asInstanceOf[KafkaSourceFactory[Any, Any]]
@@ -112,8 +118,7 @@ object KafkaSourceFactoryProcessConfigCreator {
 
     // For scenario when prepareInitialParameters fetches list of available topics form some external repository and an exception occurs.
     def jsonValueWithMetaWithException[V: ClassTag: Encoder: Decoder](
-        processObjectDependencies: ProcessObjectDependencies,
-        kafkaConfig: KafkaConfig
+        modelDependencies: ProcessObjectDependencies,
     ): KafkaSourceFactory[Any, Any] = {
       val deserializationSchemaFactory = new SampleConsumerRecordDeserializationSchemaFactory(
         new StringDeserializer with Serializable,
@@ -123,7 +128,7 @@ object KafkaSourceFactoryProcessConfigCreator {
       val kafkaSource = new KafkaSourceFactory(
         deserializationSchemaFactory,
         formatterFactory,
-        processObjectDependencies,
+        modelDependencies,
         new FlinkKafkaSourceImplFactory(None)
       ) {
         override protected def prepareInitialParameters: List[Parameter] = {
@@ -136,5 +141,3 @@ object KafkaSourceFactoryProcessConfigCreator {
   }
 
 }
-
-case object SinkForInputMeta extends SinkForType[InputMeta[Any]]

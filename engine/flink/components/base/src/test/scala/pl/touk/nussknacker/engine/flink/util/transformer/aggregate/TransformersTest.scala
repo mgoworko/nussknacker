@@ -8,55 +8,60 @@ import org.apache.flink.api.common.typeinfo.TypeInformation
 import org.scalatest.Inside
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
+import pl.touk.nussknacker.engine.api.component.ComponentDefinition
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.{
   CannotCreateObjectError,
   ExpressionParserCompilationError
 }
 import pl.touk.nussknacker.engine.api.process._
 import pl.touk.nussknacker.engine.api.typed.typing.{Typed, TypedObjectTypingResult, TypingResult}
-import pl.touk.nussknacker.engine.api.{
-  FragmentSpecificData,
-  MetaData,
-  ProcessListener,
-  ProcessVersion,
-  VariableConstants
-}
+import pl.touk.nussknacker.engine.api.{Context, FragmentSpecificData, MetaData, VariableConstants}
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.{CanonicalProcess, canonicalnode}
 import pl.touk.nussknacker.engine.compile.{CompilationResult, FragmentResolver, ProcessValidator}
-import pl.touk.nussknacker.engine.definition.parameter.editor.ParameterTypeEditorDeterminer
-import pl.touk.nussknacker.engine.deployment.DeploymentData
+import pl.touk.nussknacker.engine.definition.component.parameter.editor.ParameterTypeEditorDeterminer
 import pl.touk.nussknacker.engine.flink.test.FlinkSpec
 import pl.touk.nussknacker.engine.flink.util.source.EmitWatermarkAfterEachElementCollectionSource
-import pl.touk.nussknacker.engine.graph.evaluatedparam
+import pl.touk.nussknacker.engine.flink.util.transformer.FlinkBaseComponentProvider
+import pl.touk.nussknacker.engine.graph.evaluatedparam.{Parameter => NodeParameter}
 import pl.touk.nussknacker.engine.graph.expression.Expression
 import pl.touk.nussknacker.engine.graph.node.FragmentInputDefinition.{FragmentClazzRef, FragmentParameter}
 import pl.touk.nussknacker.engine.graph.node.{CustomNode, FragmentInputDefinition, FragmentOutputDefinition}
 import pl.touk.nussknacker.engine.graph.variable.Field
-import pl.touk.nussknacker.engine.process.ExecutionConfigPreparer
-import pl.touk.nussknacker.engine.process.compiler.FlinkProcessCompiler
-import pl.touk.nussknacker.engine.process.registrar.FlinkProcessRegistrar
+import pl.touk.nussknacker.engine.process.helpers.ConfigCreatorWithCollectingListener
+import pl.touk.nussknacker.engine.process.runner.UnitTestsFlinkRunner
 import pl.touk.nussknacker.engine.spel.Implicits._
 import pl.touk.nussknacker.engine.testing.LocalModelData
-import pl.touk.nussknacker.engine.testmode.{ResultsCollectingListener, ResultsCollectingListenerHolder, TestProcess}
+import pl.touk.nussknacker.engine.testmode.{ResultsCollectingListener, ResultsCollectingListenerHolder}
+import pl.touk.nussknacker.engine.util.Implicits.RichScalaMap
+import pl.touk.nussknacker.engine.util.config.DocsConfig
 
-import java.time.{Duration, OffsetDateTime, ZoneId}
+import java.time.{Duration, OffsetDateTime}
 import java.util
 import java.util.Arrays.asList
 import scala.jdk.CollectionConverters._
-import pl.touk.nussknacker.engine.util.Implicits.RichScalaMap
 
 class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Inside {
 
-  def modelData(list: List[TestRecord] = List(), tumblingAggregateOffset: Option[String] = None): LocalModelData = {
+  def modelData(
+      list: List[TestRecord] = List(),
+      aggregateWindowsConfig: AggregateWindowsConfig = AggregateWindowsConfig.Default,
+      collectingListener: => ResultsCollectingListener = ResultsCollectingListenerHolder.registerRun
+  ): LocalModelData = {
     val config = ConfigFactory
       .empty()
       .withValue("useTypingResultTypeInformation", fromAnyRef(true))
+    val sourceComponent = SourceFactory.noParamUnboundedStreamFactory[TestRecord](
+      EmitWatermarkAfterEachElementCollectionSource
+        .create[TestRecord](list, _.timestamp, Duration.ofHours(1))(TypeInformation.of(classOf[TestRecord]))
+    )
     LocalModelData(
-      tumblingAggregateOffset
-        .map(o => config.withValue("components.base.aggregateWindowsConfig.tumblingWindowsOffset", fromAnyRef(o)))
-        .getOrElse(config),
-      new Creator(list)
+      config,
+      ComponentDefinition("start", sourceComponent) :: FlinkBaseComponentProvider.create(
+        DocsConfig.Default,
+        aggregateWindowsConfig
+      ),
+      configCreator = new ConfigCreatorWithCollectingListener(collectingListener)
     )
   }
 
@@ -64,14 +69,25 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
 
   test("aggregates are properly validated") {
     validateOk("#AGG.approxCardinality", "#input.str", Typed[Long])
+    validateOk("#AGG.countWhen", """#input.str == "adf"""", Typed[Long])
+
+    validateOk("#AGG.average", """#input.eId""", Typed[Double])
+    validateOk("#AGG.average", """1""", Typed[Double])
+    validateOk("#AGG.average", """1.5""", Typed[Double])
+
+    validateOk("#AGG.average", """T(java.math.BigInteger).ONE""", Typed[java.math.BigDecimal])
+    validateOk("#AGG.average", """T(java.math.BigDecimal).ONE""", Typed[java.math.BigDecimal])
+
     validateOk("#AGG.set", "#input.str", Typed.fromDetailedType[java.util.Set[String]])
     validateOk(
       "#AGG.map({f1: #AGG.sum, f2: #AGG.set})",
       "{f1: #input.eId, f2: #input.str}",
-      TypedObjectTypingResult(Map("f1" -> Typed[java.lang.Long], "f2" -> Typed.fromDetailedType[java.util.Set[String]]))
+      Typed.record(Map("f1" -> Typed[java.lang.Long], "f2" -> Typed.fromDetailedType[java.util.Set[String]]))
     )
 
     validateError("#AGG.sum", "#input.str", "Invalid aggregate type: String, should be: Number")
+    validateError("#AGG.countWhen", "#input.str", "Invalid aggregate type: String, should be: Boolean")
+    validateError("#AGG.average", "#input.str", "Invalid aggregate type: String, should be: Number")
     validateError(
       "#AGG.map({f1: #AGG.set, f2: #AGG.set})",
       "{f1: #input.str}",
@@ -107,6 +123,29 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
     aggregateVariables shouldBe List(0, 1, 1)
   }
 
+  test("countWhen aggregate") {
+    val id = "1"
+
+    val model =
+      modelData(List(TestRecordHours(id, 0, 1, "a"), TestRecordHours(id, 1, 2, "b"), TestRecordHours(id, 2, 5, "c")))
+    val testProcess =
+      sliding("#AGG.countWhen", """#input.str == "a" || #input.str == "b" """, emitWhenEventLeft = false)
+
+    val aggregateVariables = runCollectOutputAggregate[Number](id, model, testProcess)
+    aggregateVariables shouldBe List(1, 2, 1)
+  }
+
+  test("average aggregate") {
+    val id = "1"
+
+    val model =
+      modelData(List(TestRecordHours(id, 0, 1, "a"), TestRecordHours(id, 1, 2, "b"), TestRecordHours(id, 2, 5, "b")))
+    val testProcess = sliding("#AGG.average", "#input.eId", emitWhenEventLeft = false)
+
+    val aggregateVariables = runCollectOutputAggregate[Number](id, model, testProcess)
+    aggregateVariables shouldBe List(1.0d, 1.5, 3.5)
+  }
+
   test("sliding aggregate should emit context of variables") {
     val id = "1"
 
@@ -116,7 +155,7 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
       sliding("#AGG.sum", "#input.eId", emitWhenEventLeft = false, afterAggregateExpression = "#input.eId")
 
     val nodeResults = runCollectOutputVariables(id, model, testProcess)
-    nodeResults.map(_.variableTyped[Number]("fooVar").get) shouldBe List(1, 2, 5)
+    nodeResults.map(_.get[Number]("fooVar").get) shouldBe List(1, 2, 5)
   }
 
   test("sum aggregate for out of order elements") {
@@ -156,7 +195,7 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
     val testProcess =
       sliding("#AGG.sum", "#input.eId", emitWhenEventLeft = true, afterAggregateExpression = "#input.eId")
 
-    val result = processValidator.validate(testProcess)
+    val result = processValidator.validate(testProcess, isFragment = false)
 
     inside(result.result) {
       case Invalid(
@@ -211,7 +250,7 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
           TestRecordWithTimestamp(id, t1b, 5, "b"),
           TestRecordWithTimestamp(id, t2, 7, "b"),
         ),
-        Some("PT-3H")
+        AggregateWindowsConfig(Some(Duration.parse("PT-3H")))
       )
 
       val testProcess = tumbling(
@@ -221,7 +260,7 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
         Map("windowLength" -> "T(java.time.Duration).parse('P1D')")
       )
 
-      val aggregateVariables = runCollectOutputAggregate[Set[Number]](id, model, testProcess)
+      val aggregateVariables = runCollectOutputAggregate[java.util.Set[Number]](id, model, testProcess)
       var expected           = List(Set(1), Set(2, 5), Set(7))
       if (trigger == TumblingWindowTrigger.OnEndWithExtraWindow) {
         expected = expected :+ Set()
@@ -283,7 +322,7 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
     val model =
       modelData(List(TestRecordHours(id, 0, 1, "a"), TestRecordHours(id, 1, 2, "b"), TestRecordHours(id, 2, 5, "b")))
 
-    lazy val run = runProcess(model, resolvedScenario, ResultsCollectingListenerHolder.registerRun(identity))
+    lazy val run = runProcess(model, resolvedScenario)
 
     the[IllegalArgumentException] thrownBy run should have message "Compilation errors: ExpressionParserCompilationError(Unresolved reference 'input',inputVarAccessTest,Some($expression),#input)"
   }
@@ -302,9 +341,9 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
 
     val nodeResults = runCollectOutputVariables(id, model, testProcess)
 
-    nodeResults.map(_.variableTyped[Number]("fooVar").get) shouldBe List(1, 2, 5)
+    nodeResults.map(_.get[Number]("fooVar").get) shouldBe List(1, 2, 5)
 
-    val aggregateVariables = nodeResults.map(_.variableTyped[java.util.List[Number]]("fragmentResult").get)
+    val aggregateVariables = nodeResults.map(_.get[java.util.List[Number]]("fragmentResult").get)
     // TODO: reverse order in aggregate
     aggregateVariables shouldBe List(asList(1), asList(2, 1), asList(5))
   }
@@ -354,6 +393,31 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
     aggregateVariables shouldBe List(3, 5, 0)
   }
 
+  test("emit aggregate for extra window when no data come for average aggregator for return type double") {
+    val id = "1"
+
+    val model =
+      modelData(List(TestRecordHours(id, 0, 1, "a")))
+    val testProcess = tumbling("#AGG.average", "#input.eId", emitWhen = TumblingWindowTrigger.OnEndWithExtraWindow)
+
+    val aggregateVariables = runCollectOutputAggregate[Number](id, model, testProcess)
+    aggregateVariables.length shouldEqual (2)
+    aggregateVariables(0) shouldEqual 1.0
+    require((aggregateVariables(1).asInstanceOf[Double].isNaN))
+  }
+
+  test("emit aggregate for extra window when no data come for average aggregator for return type BigDecimal") {
+    val id = "1"
+
+    val model =
+      modelData(List(TestRecordHours(id, 0, 1, "a")))
+    val testProcess =
+      tumbling("#AGG.average", """T(java.math.BigDecimal).ONE""", emitWhen = TumblingWindowTrigger.OnEndWithExtraWindow)
+
+    val aggregateVariables = runCollectOutputAggregate[Number](id, model, testProcess)
+    aggregateVariables shouldEqual List(new java.math.BigDecimal("1"), null)
+  }
+
   test("emit aggregate for extra window when no data come - out of order elements") {
     val id = "1"
 
@@ -395,7 +459,7 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
     aggregateVariables shouldBe List(asList(4, 3, 2, 1), asList(7, 6, 5), asList(8))
 
     val nodeResults = runCollectOutputVariables(id, model, testProcess)
-    nodeResults.flatMap(_.variableTyped[TestRecordHours]("input")) shouldBe Nil
+    nodeResults.flatMap(_.get[TestRecordHours]("input")) shouldBe Nil
   }
 
   test("sum session aggregate on event with context") {
@@ -414,11 +478,15 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
     val model       = modelData(testRecords)
     val testProcess = session("#AGG.list", "#input.eId", SessionWindowTrigger.OnEvent, "#input.str == 'stop'")
 
-    val aggregateVariables = runCollectOutputAggregate[Number](id, model, testProcess)
-    aggregateVariables shouldBe List(asList(1), asList(2, 1), asList(3), asList(4, 3), asList(5))
-
-    val nodeResults = runCollectOutputVariables(id, model, testProcess)
-    nodeResults.flatMap(_.variableTyped[TestRecordHours]("input")) shouldBe testRecords
+    val outputVariables = runCollectOutputVariables(id, model, testProcess)
+    outputVariables.map(_.get[java.util.List[Number]]("fragmentResult").get) shouldBe List(
+      asList(1),
+      asList(2, 1),
+      asList(3),
+      asList(4, 3),
+      asList(5)
+    )
+    outputVariables.map(_.get[TestRecordHours]("input").get) shouldBe testRecords
   }
 
   test("map aggregate") {
@@ -456,14 +524,15 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
   }
 
   test("base aggregates test") {
-
     val id = "1"
 
+    val collectingListener = ResultsCollectingListenerHolder.registerRun
     val model = modelData(
       List(
         TestRecordHours(id, 1, 2, "a"),
         TestRecordHours(id, 2, 1, "b")
-      )
+      ),
+      collectingListener = collectingListener
     )
 
     val aggregates = List(
@@ -492,11 +561,10 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
         ): _*
     )
 
-    val collectingListener = ResultsCollectingListenerHolder.registerRun(identity)
-    runProcess(model, testProcess, collectingListener)
+    runProcess(model, testProcess)
     val lastResult = variablesForKey(collectingListener, id).last
     aggregates.foreach { case (name, expected) =>
-      lastResult.variableTyped[AnyRef](s"fragmentResult$name").get shouldBe expected
+      lastResult.get[AnyRef](s"fragmentResult$name").get shouldBe expected
     }
   }
 
@@ -505,48 +573,35 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
       model: LocalModelData,
       testProcess: CanonicalProcess
   ): List[T] = {
-    runCollectOutputVariables(key, model, testProcess).map(_.variableTyped[T]("fragmentResult").get)
+    runCollectOutputVariables(key, model, testProcess).map(_.get[T]("fragmentResult").get)
   }
 
   private def runCollectOutputVariables(
       key: String,
       model: LocalModelData,
       testProcess: CanonicalProcess
-  ): List[TestProcess.NodeResult[Any]] = {
-    val collectingListener = ResultsCollectingListenerHolder.registerRun(identity)
-    runProcess(model, testProcess, collectingListener)
+  ): List[Context] = {
+    runProcess(model, testProcess)
+    val collectingListener = model.configCreator.asInstanceOf[ConfigCreatorWithCollectingListener].collectingListener
     variablesForKey(collectingListener, key)
   }
 
   private def runProcess(
       model: LocalModelData,
-      testProcess: CanonicalProcess,
-      collectingListener: ResultsCollectingListener
+      testProcess: CanonicalProcess
   ): Unit = {
     val stoppableEnv = flinkMiniCluster.createExecutionEnvironment()
-    val registrar = FlinkProcessRegistrar(
-      new FlinkProcessCompiler(model) {
-        override protected def adjustListeners(
-            defaults: List[ProcessListener],
-            processObjectDependencies: ProcessObjectDependencies
-        ): List[ProcessListener] = {
-          collectingListener :: defaults
-        }
-      },
-      ExecutionConfigPreparer.unOptimizedChain(model)
-    )
-    registrar.register(stoppableEnv, testProcess, ProcessVersion.empty, DeploymentData.empty)
-    stoppableEnv.executeAndWaitForFinished(testProcess.id)()
+    UnitTestsFlinkRunner.registerInEnvironmentWithModel(stoppableEnv, model)(testProcess)
+    stoppableEnv.executeAndWaitForFinished(testProcess.name.value)()
   }
 
   private def variablesForKey(
       collectingListener: ResultsCollectingListener,
       key: String
-  ): List[TestProcess.NodeResult[Any]] = {
-    collectingListener
-      .results[Any]
+  ): List[Context] = {
+    collectingListener.results
       .nodeResults("end")
-      .filter(_.variableTyped(VariableConstants.KeyVariableName).contains(key))
+      .filter(_.get[String](VariableConstants.KeyVariableName).contains(key))
   }
 
   private def validateError(aggregator: String, aggregateBy: String, error: String): Unit = {
@@ -562,7 +617,7 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
   }
 
   private def validateConfig(aggregator: String, aggregateBy: String): CompilationResult[Unit] = {
-    processValidator.validate(sliding(aggregator, aggregateBy, emitWhenEventLeft = false))
+    processValidator.validate(sliding(aggregator, aggregateBy, emitWhenEventLeft = false), isFragment = false)
   }
 
   private def tumbling(
@@ -692,11 +747,11 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
             Some("aggresult"),
             "aggregate-tumbling",
             List(
-              evaluatedparam.Parameter("groupBy", asSpelExpression("#key")),
-              evaluatedparam.Parameter("aggregator", asSpelExpression("#AGG.sum")),
-              evaluatedparam.Parameter("aggregateBy", asSpelExpression("#aggBy")),
-              evaluatedparam.Parameter("windowLength", asSpelExpression("T(java.time.Duration).parse('PT2H')")),
-              evaluatedparam.Parameter(
+              NodeParameter("groupBy", asSpelExpression("#key")),
+              NodeParameter("aggregator", asSpelExpression("#AGG.sum")),
+              NodeParameter("aggregateBy", asSpelExpression("#aggBy")),
+              NodeParameter("windowLength", asSpelExpression("T(java.time.Duration).parse('PT2H')")),
+              NodeParameter(
                 "emitWhen",
                 asSpelExpression(
                   "T(pl.touk.nussknacker.engine.flink.util.transformer.aggregate.TumblingWindowTrigger).OnEnd"
@@ -716,25 +771,7 @@ class TransformersTest extends AnyFunSuite with FlinkSpec with Matchers with Ins
       List.empty
     )
 
-    FragmentResolver(Set(fragmentWithTumblingAggregate)).resolve(scenario).toOption.get
-  }
-
-}
-
-class Creator(input: List[TestRecord]) extends EmptyProcessConfigCreator {
-
-  override def sourceFactories(
-      processObjectDependencies: ProcessObjectDependencies
-  ): Map[String, WithCategories[SourceFactory]] = {
-    implicit val testRecordTypeInfo: TypeInformation[TestRecord] = TypeInformation.of(classOf[TestRecord])
-    Map(
-      "start" -> WithCategories.anyCategory(
-        SourceFactory.noParam[TestRecord](
-          EmitWatermarkAfterEachElementCollectionSource
-            .create[TestRecord](input, _.timestamp, Duration.ofHours(1))
-        )
-      )
-    )
+    FragmentResolver(List(fragmentWithTumblingAggregate)).resolve(scenario).toOption.get
   }
 
 }

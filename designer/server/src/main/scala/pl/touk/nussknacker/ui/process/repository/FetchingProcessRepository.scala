@@ -1,9 +1,7 @@
 package pl.touk.nussknacker.ui.process.repository
 
 import cats.Monad
-import pl.touk.nussknacker.engine.api.process.{ProcessId, ProcessName, VersionId}
-import pl.touk.nussknacker.engine.api.process.ProcessingType
-import pl.touk.nussknacker.ui.db.entity.ProcessEntityData
+import pl.touk.nussknacker.engine.api.process.{ProcessId, ProcessIdWithName, ProcessName, ProcessingType, VersionId}
 import pl.touk.nussknacker.ui.process.ScenarioQuery
 import pl.touk.nussknacker.ui.security.api.LoggedUser
 
@@ -21,7 +19,7 @@ abstract class FetchingProcessRepository[F[_]: Monad] extends ProcessDBQueryRepo
       ec: ExecutionContext
   ): F[Option[ScenarioWithDetailsEntity[PS]]]
 
-  def fetchProcessesDetails[PS: ScenarioShapeFetchStrategy](
+  def fetchLatestProcessesDetails[PS: ScenarioShapeFetchStrategy](
       query: ScenarioQuery
   )(implicit loggedUser: LoggedUser, ec: ExecutionContext): F[List[ScenarioWithDetailsEntity[PS]]]
 
@@ -31,9 +29,7 @@ abstract class FetchingProcessRepository[F[_]: Monad] extends ProcessDBQueryRepo
 
   // TODO: It should return F[Option[ProcessingType]]
   def fetchProcessingType(
-      processId: ProcessId
+      processId: ProcessIdWithName
   )(implicit loggedUser: LoggedUser, ec: ExecutionContext): F[ProcessingType]
-
-  def fetchProcessDetails(processName: ProcessName)(implicit ec: ExecutionContext): F[Option[ProcessEntityData]]
 
 }

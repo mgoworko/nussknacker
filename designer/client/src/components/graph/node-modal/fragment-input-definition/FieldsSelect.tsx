@@ -1,6 +1,5 @@
 import React, { useCallback, useMemo } from "react";
-import { FixedValuesPresets, Parameter, VariableTypes } from "../../../../types";
-import { allValid, mandatoryValueValidator, uniqueListValueValidator, Validator, Error } from "../editors/Validators";
+import { FixedValuesPresets, NodeValidationError, Parameter, VariableTypes } from "../../../../types";
 import { DndItems } from "../../../common/dndItems/DndItems";
 import { NodeRowFieldsProvider } from "../node-row-fields-provider";
 import { Item, onChangeType, FragmentInputParameter } from "./item";
@@ -22,7 +21,7 @@ interface FieldsSelectProps {
     showValidation?: boolean;
     variableTypes: VariableTypes;
     fixedValuesPresets: FixedValuesPresets;
-    fieldErrors: Error[];
+    errors: NodeValidationError[];
 }
 
 export function FieldsSelect(props: FieldsSelectProps): JSX.Element {
@@ -38,26 +37,15 @@ export function FieldsSelect(props: FieldsSelectProps): JSX.Element {
         readOnly,
         showValidation,
         fixedValuesPresets,
-        fieldErrors,
+        errors,
     } = props;
 
     const ItemElement = useCallback(
-        ({
-            index,
-            item,
-            validators,
-            fieldsErrors,
-        }: {
-            index: number;
-            item: FragmentInputParameter;
-            validators: Validator[];
-            fieldsErrors: Error[];
-        }) => {
+        ({ index, item, errors }: { index: number; item: FragmentInputParameter; errors: NodeValidationError[] }) => {
             return (
                 <Item
                     index={index}
                     item={item}
-                    validators={validators}
                     namespace={namespace}
                     onChange={onChange}
                     options={options}
@@ -65,7 +53,7 @@ export function FieldsSelect(props: FieldsSelectProps): JSX.Element {
                     variableTypes={variableTypes}
                     showValidation={showValidation}
                     fixedValuesPresets={fixedValuesPresets}
-                    fieldsErrors={fieldsErrors}
+                    errors={errors}
                 />
             );
         },
@@ -76,26 +64,11 @@ export function FieldsSelect(props: FieldsSelectProps): JSX.Element {
 
     const items = useMemo(
         () =>
-            fields.map((item: any, index, list) => {
-                const validators = [
-                    mandatoryValueValidator,
-                    uniqueListValueValidator(
-                        list.map((v) => v.name),
-                        index,
-                    ),
-                ];
-
-                /*
-                 * Display settings errors only when the name is correct, for now, the name is used in the fieldName to recognize the list item,
-                 * but it can be a situation where that name is not unique or is empty in a few parameters, in this case, there is a problem with a correct error display
-                 */
-                const displayableErrors = allValid(validators, item.name) ? fieldErrors : [];
-                return {
-                    item,
-                    el: <ItemElement key={index} index={index} item={item} validators={validators} fieldsErrors={displayableErrors} />,
-                };
-            }),
-        [ItemElement, fieldErrors, fields],
+            fields.map((item, index) => ({
+                item,
+                el: <ItemElement key={index} index={index} item={item as FragmentInputParameter} errors={errors} />,
+            })),
+        [ItemElement, errors, fields],
     );
 
     return (

@@ -184,8 +184,7 @@ users: [
 rules: [
   {
     role: "Admin"
-    isAdmin: true,
-    categories: ["RequestResponseCategory1"]
+    isAdmin: true
   },
   {
     role: "UserWithAdminTab"
@@ -505,7 +504,7 @@ processToolbarConfig {
     ]
     topRight: [
       {
-        type: "process-info-panel"
+        type: "process-actions-panel"
         buttons: [
           { type: "process-save", disabled: { fragment: false, archived: true, type: "oneof" } }
           { type: "custom-link", title: "Metrics for $processName", url: "/metrics/$processId" }
@@ -578,8 +577,9 @@ processToolbarConfig {
       { type: "attachments-panel" }
     ]
     topRight: [
+      { type: "process-info-panel" }
       {
-        type: "process-info-panel"
+        type: "process-actions-panel"
         buttons: [
           { type: "process-save", title: "Save changes", disabled: { archived: true } }
           { type: "process-deploy", disabled: { fragment: true, archived: true, type: "oneof" } }
@@ -685,7 +685,7 @@ By default, only `Scenarios` tab is configured.
 
 The types of tabs can be as follows (see `dev-application.conf` for some examples):
 - IFrame - contents of the url parameter will be embedded as IFrame
-- Local - redirect to Designer page (`/admin`, `/processes` etc., see [code](https://github.com/TouK/nussknacker/blob/staging/designer/client/containers/NussknackerApp.tsx#L118)
+- Local - redirect to Designer page (`/admin`, `/processes` etc., see [code](https://github.com/TouK/nussknacker/blob/staging/designer/client/src/containers/RootRoutes.tsx#L23)
   for other options)
 - Remote - [module federation](https://webpack.js.org/concepts/module-federation/) can be used to embed external tabs, url should be in form: `{module}/{path}@{host}/{remoteEntry}.js`
 - Url - redirect to external page/url
@@ -779,7 +779,7 @@ In Nussknacker distribution there are preconfigured scenario types:
 - `streaming-lite-embedded` - using embedded Lite Deployment Manager in Streaming processing mode providing only stateless streaming components
 - `request-response-embedded` - use embedded Request-Response Deployment Manager, scenario logic is exposed as REST API, on additional HTTP port at Designer
 
-And one `Default` category using `streaming` by default (can be configured via `DEFAULT_SCENARIO_TYPE` environment variable)
+Each of these scenario types has `Default` category assigned.
 
 See [example](https://github.com/TouK/nussknacker/blob/staging/nussknacker-dist/src/universal/conf/dev-application.conf#L33)
 from development config for more complex examples.

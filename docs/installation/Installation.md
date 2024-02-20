@@ -24,12 +24,12 @@ need configured Kubernetes cluster to actually run scenarios in this mode - we r
 
 If you want to check locally Streaming processing mode with plain Docker and embedded engine just run:
 ```bash
-docker run -it --network host -e DEFAULT_SCENARIO_TYPE=streaming-lite-embedded -e KAFKA_ADDRESS=localhost:3032 -e SCHEMA_REGISTRY_URL=http://localhost:3082 touk/nussknacker:latest
+docker run -it --network host -e KAFKA_ADDRESS=localhost:3032 -e SCHEMA_REGISTRY_URL=http://localhost:3082 touk/nussknacker:latest
 ```
-
+Note: `--network host `only works on linux and is used to connect to existing kafka/schema registry. In case of other OS you have to use different methods to make it accessible from Nussknacker container (e.g start Kafka/SR and Nussknacker in a single docker network)
 If you want to see Nussknacker in action without Kafka, using embedded Request-Response processing mode (scenario logic is exposed with REST API), run:
 ```bash
-docker run -it --network host -e DEFAULT_SCENARIO_TYPE=request-response-embedded touk/nussknacker:latest
+docker run -it -p 8080:8080 -p 8181:8181 touk/nussknacker:latest
 ```
 After it started go to http://localhost:8080 and login using credentials: admin/admin.
 REST endpoints of deployed scenarios will be exposed at `http://localhost:8181/scenario/<slug>`. Slug is defined in Properties, and by default it is scenario name.
@@ -63,8 +63,10 @@ You can check example usage at [Nussknacker Quickstart repository](https://githu
 
 All configuration options are described in [Configuration](../installation_configuration_guide/DesignerConfiguration.md).
 
-Some of them can be configured using environment variables, which is mostly helpful in Docker setup.
-In the table below there are all environment variables used in Nussknacker image. $NUSSKNACKER_DIR is a placeholder pointing to Nussknacker installation directory.
+Some of them can be configured using already predefined environment variables, which is mostly useful in the Docker setup.
+The table below shows all the predefined environment variables used in the Nussknacker image. `$NUSSKNACKER_DIR` is a placeholder pointing to the Nussknacker installation directory.
+
+Because we use [HOCON](../installation_configuration_guide/Common.md#conventions), you can set (or override) any configuration value used by Nussknacker even if the already predefined environment variable does not exist. This is achieved by setting the JVM property `-Dconfig.override_with_env_vars=true` and setting environment variables following conventions described [here](https://github.com/lightbend/config?tab=readme-ov-file#optional-system-or-env-variable-overrides).
 
 ### Basic environment variables
 
@@ -97,7 +99,6 @@ In the table below there are all environment variables used in Nussknacker image
 | GRAFANA_URL                   | string          | /grafana                                                                                                                     | URL to Grafana, used in UI. Should be relative to Nussknacker URL to avoid additional CORS configuration                                                                                                                                                                                                                                            |
 | INFLUXDB_URL                  | string          | http://localhost:8086                                                                                                        | URL to InfluxDB used by counts mechanism                                                                                                                                                                                                                                                                                                            |
 | MODEL_CLASS_PATH              | list of strings | `["model/defaultModel.jar", "model/flinkExecutor.jar", "components/flink/flinkBase.jar", "components/flink/flinkKafka.jar"]` | Classpath of model (jars that will be used for execution of scenarios)                                                                                                                                                                                                                                                                              |
-| DEFAULT_SCENARIO_TYPE         | string          | streaming                                                                                                                    | Default scenario type. It determines both available components and the way how scenarios are executed. To read more see [Scenario type and categories paragraph](../installation_configuration_guide/DesignerConfiguration.md#scenario-type-categories). Available options are: `streaming`, `streaming-lite-embedded`, `request-response-embedded` |
 | PROMETHEUS_METRICS_PORT       | int             |                                                                                                                              | When defined, JMX MBeans are exposed as Prometheus metrics on this port                                                                                                                                                                                                                                                                             |
 | PROMETHEUS_AGENT_CONFIG_FILE  | int             | $NUSSKNACKER_DIR/conf/jmx_prometheus.yaml                                                                                    | Default configuration for JMX Prometheus agent. Used only when agent is enabled. See `PROMETHEUS_METRICS_PORT`                                                                                                                                                                                                                                      |
 

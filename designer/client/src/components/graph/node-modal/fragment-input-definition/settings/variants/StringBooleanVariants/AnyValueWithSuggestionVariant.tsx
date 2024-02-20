@@ -1,12 +1,14 @@
 import React from "react";
 import InitialValue from "../fields/InitialValue";
-import { SettingLabelStyled, SettingRow } from "../fields/StyledSettingsComponnets";
+import { SettingLabelStyled } from "../fields/StyledSettingsComponnets";
 import { TextAreaNodeWithFocus } from "../../../../../../withFocus";
 import { AnyValueWithSuggestionsParameterVariant, FixedValuesType, onChangeType } from "../../../item";
 import { useTranslation } from "react-i18next";
 import { FixedValuesSetting } from "../fields/FixedValuesSetting";
-import { FixedValuesPresets, VariableTypes } from "../../../../../../../types";
-import { Error } from "../../../../editors/Validators";
+import { FixedValuesPresets, NodeValidationError, VariableTypes } from "../../../../../../../types";
+import { ValidationsFields } from "../fields/validation";
+import { getValidationErrorsForField } from "../../../../editors/Validators";
+import { FormControl } from "@mui/material";
 import { FixedValuesGroup } from "../fields/FixedValuesGroup";
 
 interface Props {
@@ -16,18 +18,10 @@ interface Props {
     variableTypes: VariableTypes;
     fixedValuesPresets: FixedValuesPresets;
     readOnly: boolean;
-    fieldsErrors: Error[];
+    errors: NodeValidationError[];
 }
 
-export const AnyValueWithSuggestionVariant = ({
-    item,
-    path,
-    onChange,
-    variableTypes,
-    fixedValuesPresets,
-    readOnly,
-    fieldsErrors,
-}: Props) => {
+export const AnyValueWithSuggestionVariant = ({ item, path, onChange, variableTypes, fixedValuesPresets, readOnly, errors }: Props) => {
     const { t } = useTranslation();
 
     const presetListItemOptions = fixedValuesPresets?.[item.valueEditor.fixedValuesPresetId]?.values ?? [];
@@ -49,12 +43,19 @@ export const AnyValueWithSuggestionVariant = ({
                 fixedValuesListPresetId={item.valueEditor.fixedValuesPresetId}
                 readOnly={readOnly}
                 variableTypes={variableTypes}
-                fieldsErrors={fieldsErrors}
+                errors={errors}
                 typ={item.typ}
                 name={item.name}
                 initialValue={item.initialValue}
             />
-            {/*<ValidationsFields path={path} onChange={onChange} item={item} variableTypes={variableTypes} />*/}
+            <ValidationsFields
+                path={path}
+                onChange={onChange}
+                item={item}
+                variableTypes={variableTypes}
+                readOnly={readOnly}
+                errors={errors}
+            />
             <InitialValue
                 path={path}
                 item={item}
@@ -62,10 +63,9 @@ export const AnyValueWithSuggestionVariant = ({
                 options={fixedValuesType === FixedValuesType.ValueInputWithFixedValuesProvided ? fixedValuesList : presetListItemOptions}
                 readOnly={readOnly}
                 variableTypes={variableTypes}
-                fieldsErrors={fieldsErrors}
-                fieldName={`$param.${item.name}.$initialValue`}
+                fieldErrors={getValidationErrorsForField(errors, `$param.${item.name}.$initialValue`)}
             />
-            <SettingRow>
+            <FormControl>
                 <SettingLabelStyled>{t("fragment.hintText", "Hint text:")}</SettingLabelStyled>
                 <TextAreaNodeWithFocus
                     value={item.hintText}
@@ -74,7 +74,7 @@ export const AnyValueWithSuggestionVariant = ({
                     disabled={readOnly}
                     className={"node-input"}
                 />
-            </SettingRow>
+            </FormControl>
         </>
     );
 };

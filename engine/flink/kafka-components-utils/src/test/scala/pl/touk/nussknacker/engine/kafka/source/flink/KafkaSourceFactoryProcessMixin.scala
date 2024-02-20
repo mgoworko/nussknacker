@@ -4,26 +4,16 @@ import org.apache.kafka.common.record.TimestampType
 import org.scalatest.BeforeAndAfter
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
-import pl.touk.nussknacker.engine.api.process.ProcessConfigCreator
-import pl.touk.nussknacker.engine.api.{ProcessVersion, process}
 import pl.touk.nussknacker.engine.build.{GraphBuilder, ScenarioBuilder}
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
-import pl.touk.nussknacker.engine.definition.DefinitionExtractor.ObjectWithMethodDef
-import pl.touk.nussknacker.engine.definition.ProcessDefinitionExtractor.ModelDefinitionWithTypes
-import pl.touk.nussknacker.engine.definition.{DefinitionExtractor, ProcessDefinitionExtractor, TypeInfos}
-import pl.touk.nussknacker.engine.deployment.DeploymentData
 import pl.touk.nussknacker.engine.flink.test.{FlinkSpec, RecordingExceptionConsumer}
 import pl.touk.nussknacker.engine.kafka.KafkaFactory.{SinkValueParamName, TopicParamName}
 import pl.touk.nussknacker.engine.kafka.source.InputMeta
 import pl.touk.nussknacker.engine.kafka.source.flink.KafkaSourceFactoryMixin.ObjToSerialize
-import pl.touk.nussknacker.engine.kafka.source.flink.KafkaSourceFactoryProcessConfigCreator.SinkForSampleValue
-import pl.touk.nussknacker.engine.process.ExecutionConfigPreparer
-import pl.touk.nussknacker.engine.process.compiler.FlinkProcessCompiler
-import pl.touk.nussknacker.engine.process.helpers.SampleNodes.{SinkForLongs, SinkForStrings}
-import pl.touk.nussknacker.engine.process.registrar.FlinkProcessRegistrar
+import pl.touk.nussknacker.engine.kafka.source.flink.KafkaSourceFactoryProcessConfigCreator.ResultsHolders
+import pl.touk.nussknacker.engine.process.runner.UnitTestsFlinkRunner
 import pl.touk.nussknacker.engine.spel.Implicits._
 import pl.touk.nussknacker.engine.testing.LocalModelData
-import pl.touk.nussknacker.engine.util.namespaces.ObjectNamingProvider
 import pl.touk.nussknacker.test.NuScalaTestAssertions
 
 import scala.jdk.CollectionConverters._
@@ -36,57 +26,41 @@ trait KafkaSourceFactoryProcessMixin
     with BeforeAndAfter
     with NuScalaTestAssertions {
 
-  protected var registrar: FlinkProcessRegistrar = _
+  protected def resultHolders: () => ResultsHolders
 
-  protected lazy val creator: ProcessConfigCreator = new KafkaSourceFactoryProcessConfigCreator()
-
-  protected lazy val modelDefinitionWithTypes: ModelDefinitionWithTypes =
-    ModelDefinitionWithTypes(
-      ProcessDefinitionExtractor.extractObjectWithMethods(
-        creator,
-        getClass.getClassLoader,
-        process.ProcessObjectDependencies(config, ObjectNamingProvider(getClass.getClassLoader)),
-        category = None
-      )
-    )
+  protected lazy val modelData =
+    LocalModelData(config, List.empty, configCreator = new KafkaSourceFactoryProcessConfigCreator(resultHolders))
 
   protected override def beforeAll(): Unit = {
     super.beforeAll()
-    val modelData = LocalModelData(config, creator)
-    registrar =
-      FlinkProcessRegistrar(new FlinkProcessCompiler(modelData), ExecutionConfigPreparer.unOptimizedChain(modelData))
   }
 
   before {
-    SinkForSampleValue.clear()
-    SinkForInputMeta.clear()
-    SinkForStrings.clear()
-    SinkForLongs.clear()
+    resultHolders().clear()
   }
 
   protected def run(process: CanonicalProcess)(action: => Unit): Unit = {
     val env = flinkMiniCluster.createExecutionEnvironment()
-    registrar.register(env, process, ProcessVersion.empty, DeploymentData.empty)
-    env.withJobRunning(process.id)(action)
+    UnitTestsFlinkRunner.registerInEnvironmentWithModel(env, modelData)(process)
+    env.withJobRunning(process.name.value)(action)
   }
 
   protected def runAndVerifyResult(
       topicName: String,
       process: CanonicalProcess,
       obj: ObjToSerialize
-  ): List[InputMeta[Any]] = {
+  ): Unit = {
     val topic = createTopic(topicName)
-    pushMessage(objToSerializeSerializationSchema(topic), obj, topic, timestamp = constTimestamp)
+    pushMessage(objToSerializeSerializationSchema(topic), obj, timestamp = constTimestamp)
     run(process) {
       eventually {
-        SinkForInputMeta.data shouldBe List(
+        RecordingExceptionConsumer.exceptionsFor(runId) should have size 0
+        resultHolders().sinkForSimpleJsonRecordResultsHolder.results shouldBe List(obj.value)
+        resultHolders().sinkForInputMetaResultsHolder.results shouldBe List(
           InputMeta(obj.key, topic, 0, 0L, constTimestamp, TimestampType.CREATE_TIME, obj.headers.asJava, 0)
         )
-        SinkForSampleValue.data shouldBe List(obj.value)
-        RecordingExceptionConsumer.dataFor(runId) should have size 0
       }
     }
-    SinkForInputMeta.data
   }
 
   object SourceType extends Enumeration {

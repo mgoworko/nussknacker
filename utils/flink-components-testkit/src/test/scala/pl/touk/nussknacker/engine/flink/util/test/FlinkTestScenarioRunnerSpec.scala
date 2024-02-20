@@ -4,18 +4,15 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import pl.touk.nussknacker.engine.api._
 import pl.touk.nussknacker.engine.api.component.ComponentDefinition
-import pl.touk.nussknacker.engine.api.exception.NuExceptionInfo
 import pl.touk.nussknacker.engine.api.process.ComponentUseCase
 import pl.touk.nussknacker.engine.api.test.InvocationCollectors.ServiceInvocationCollector
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.flink.test.FlinkSpec
 import pl.touk.nussknacker.engine.spel.SpelExpressionEvaluationException
-import pl.touk.nussknacker.engine.util.functions._
 import pl.touk.nussknacker.engine.util.test.TestScenarioRunner
 import pl.touk.nussknacker.test.ValidatedValuesDetailedMessage
 
-import java.time.{Clock, Instant, ZoneId}
 import scala.concurrent.{ExecutionContext, Future}
 
 class FlinkTestScenarioRunnerSpec extends AnyFunSuite with Matchers with FlinkSpec with ValidatedValuesDetailedMessage {
@@ -64,24 +61,37 @@ class FlinkTestScenarioRunnerSpec extends AnyFunSuite with Matchers with FlinkSp
     runResults.validValue.successes shouldBe List(TestService.MockedValued)
   }
 
-  test("should allowing use global variable - date helper") {
-    val now        = Instant.now()
-    val dateHelper = new DateUtils(Clock.fixed(now, ZoneId.systemDefault()))
-
-    val scenario: CanonicalProcess =
+  test("should allow using extra global variables") {
+    val scenario =
       ScenarioBuilder
         .streaming(getClass.getName)
         .source("start", TestScenarioRunner.testDataSource)
-        .processorEnd("end", TestScenarioRunner.testResultService, "value" -> "#DATE.now.toString")
+        .processorEnd("end", TestScenarioRunner.testResultService, "value" -> "#SAMPLE.foo")
 
     val runResults =
       TestScenarioRunner
         .flinkBased(config, flinkMiniCluster)
-        .withExtraGlobalVariables(Map("DATE" -> dateHelper))
+        .withExtraGlobalVariables(Map("SAMPLE" -> SampleHelper))
         .build()
         .runWithData[String, String](scenario, List("lcl"))
 
-    runResults.validValue.successes shouldBe List(now.toString)
+    runResults.validValue.successes shouldBe List(SampleHelper.foo)
+  }
+
+  test("should allow using default global variables") {
+    val scenario =
+      ScenarioBuilder
+        .streaming(getClass.getName)
+        .source("start", TestScenarioRunner.testDataSource)
+        .processorEnd("end", TestScenarioRunner.testResultService, "value" -> "#NUMERIC.negate(#input)")
+
+    val runResults =
+      TestScenarioRunner
+        .flinkBased(config, flinkMiniCluster)
+        .build()
+        .runWithData[Int, Int](scenario, List(123))
+
+    runResults.validValue.successes shouldBe List(-123)
   }
 
   test("should handle exception during runtime in test run mode") {
@@ -113,21 +123,24 @@ class FlinkTestScenarioRunnerSpec extends AnyFunSuite with Matchers with FlinkSp
     val MockedValued = "sample-mocked"
 
     @MethodToInvoke
-    def invoke(@ParamName("param") value: LazyParameter[String]): ServiceInvoker = new ServiceInvoker {
+    def prepare(@ParamName("param") value: LazyParameter[String]): ServiceInvoker = new ServiceInvoker {
 
-      override def invokeService(params: Map[String, Any])(
+      override def invoke(context: Context)(
           implicit ec: ExecutionContext,
           collector: ServiceInvocationCollector,
-          contextId: ContextId,
           componentUseCase: ComponentUseCase
       ): Future[String] = {
         collector.collect(s"test-service-$value", Option(MockedValued)) {
-          Future.successful(params("param").asInstanceOf[String])
+          Future.successful(value.evaluate(context))
         }
       }
 
     }
 
+  }
+
+  object SampleHelper {
+    def foo: Int = 123
   }
 
 }

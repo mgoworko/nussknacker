@@ -23,6 +23,12 @@
                     "typ": {
                         "refClazzName": "java.lang.String"
                     }
+                },
+                {
+                    "name": "parameter2",
+                    "typ": {
+                        "refClazzName": "java.lang.String"
+                    }
                 }
             ],
             "additionalFields": {
@@ -38,10 +44,10 @@
             "nextFalse": [
                 {
                     "id": "failureOutput",
-                    "outputName": "output",
+                    "outputName": "output1",
                     "fields": [
                         {
-                            "name": "dsadasd",
+                            "name": "failureOutput1",
                             "expression": {
                                 "language": "spel",
                                 "expression": "#parameter2"
@@ -75,10 +81,10 @@
         },
         {
             "id": "output",
-            "outputName": "output",
+            "outputName": "output2",
             "fields": [
                 {
-                    "name": "jhkgk",
+                    "name": "successOutput1",
                     "expression": {
                         "language": "spel",
                         "expression": "#parameter1"

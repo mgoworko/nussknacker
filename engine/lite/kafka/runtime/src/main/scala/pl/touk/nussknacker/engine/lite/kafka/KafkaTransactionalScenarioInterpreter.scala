@@ -3,7 +3,7 @@ package pl.touk.nussknacker.engine.lite.kafka
 import akka.http.scaladsl.server.Route
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.producer.ProducerRecord
-import pl.touk.nussknacker.engine.Interpreter.{FutureShape, InterpreterShape}
+import pl.touk.nussknacker.engine.Interpreter.FutureShape
 import pl.touk.nussknacker.engine.ModelData
 import pl.touk.nussknacker.engine.api.JobData
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
@@ -65,8 +65,6 @@ object KafkaTransactionalScenarioInterpreter {
 
   private[kafka] implicit val capability: FixedCapabilityTransformer[Future] = new FixedCapabilityTransformer[Future]()
 
-  private[kafka] implicit def shape(implicit ec: ExecutionContext): InterpreterShape[Future] = new FutureShape()
-
   def testRunner(implicit ec: ExecutionContext): TestRunner = new InterpreterTestRunner[Future, Input, AnyRef]
 
   def apply(
@@ -100,6 +98,7 @@ class KafkaTransactionalScenarioInterpreter private[kafka] (
     engineRuntimeContextPreparer: LiteEngineRuntimeContextPreparer
 )(implicit ec: ExecutionContext)
     extends RunnableScenarioInterpreter {
+
   override def status(): TaskStatus = taskRunner.status()
 
   import KafkaTransactionalScenarioInterpreter._
@@ -111,10 +110,10 @@ class KafkaTransactionalScenarioInterpreter private[kafka] (
 
   private val sourceMetrics = new SourceMetrics(interpreter.sources.keys)
 
-  private val interpreterConfig = modelData.processConfig.as[KafkaInterpreterConfig]
+  private val interpreterConfig = modelData.modelConfig.as[KafkaInterpreterConfig]
 
   private val taskRunner: TaskRunner = new TaskRunner(
-    scenario.id,
+    scenario.name.value,
     liteKafkaJobData.tasksCount,
     createScenarioTaskRun,
     interpreterConfig.shutdownTimeout,
@@ -134,7 +133,15 @@ class KafkaTransactionalScenarioInterpreter private[kafka] (
 
   // to override in tests...
   private[kafka] def createScenarioTaskRun(taskId: String): Task = {
-    new KafkaSingleScenarioTaskRun(taskId, scenario.metaData, context, interpreterConfig, interpreter, sourceMetrics)
+    new KafkaSingleScenarioTaskRun(
+      taskId,
+      scenario.metaData,
+      context,
+      interpreterConfig,
+      interpreter,
+      sourceMetrics,
+      modelData.namingStrategy
+    )
   }
 
   override def routes: Option[Route] = None

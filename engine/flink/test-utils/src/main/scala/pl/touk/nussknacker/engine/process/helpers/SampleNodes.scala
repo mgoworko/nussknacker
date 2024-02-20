@@ -16,17 +16,20 @@ import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord
 import org.apache.flink.util.Collector
 import pl.touk.nussknacker.engine.api._
+import pl.touk.nussknacker.engine.api.component.UnboundedStreamComponent
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.CustomNodeError
 import pl.touk.nussknacker.engine.api.context._
 import pl.touk.nussknacker.engine.api.context.transformation._
 import pl.touk.nussknacker.engine.api.definition._
+import pl.touk.nussknacker.engine.api.exception.NuExceptionInfo
 import pl.touk.nussknacker.engine.api.process._
 import pl.touk.nussknacker.engine.api.runtimecontext.{ContextIdGenerator, EngineRuntimeContext}
 import pl.touk.nussknacker.engine.api.test.InvocationCollectors.ServiceInvocationCollector
 import pl.touk.nussknacker.engine.api.test.{TestData, TestRecord, TestRecordParser}
-import pl.touk.nussknacker.engine.api.typed.typing.{Typed, TypedObjectTypingResult, Unknown}
+import pl.touk.nussknacker.engine.api.typed.typing.{Typed, Unknown}
 import pl.touk.nussknacker.engine.api.typed.{ReturningType, TypedMap, typing}
 import pl.touk.nussknacker.engine.flink.api.compat.ExplicitUidInOperatorsSupport
+import pl.touk.nussknacker.engine.flink.api.datastream.DataStreamImplicits._
 import pl.touk.nussknacker.engine.flink.api.process._
 import pl.touk.nussknacker.engine.flink.api.timestampwatermark.{
   StandardTimestampWatermarkHandler,
@@ -37,14 +40,13 @@ import pl.touk.nussknacker.engine.flink.util.source.CollectionSource
 import pl.touk.nussknacker.engine.process.SimpleJavaEnum
 import pl.touk.nussknacker.engine.util.service.{EnricherContextTransformation, TimeMeasuringService}
 import pl.touk.nussknacker.engine.util.typing.TypingUtils
-import pl.touk.nussknacker.test.WithDataList
-import pl.touk.nussknacker.engine.flink.api.datastream.DataStreamImplicits._
 
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.{Date, Optional, UUID}
 import javax.annotation.Nullable
-import scala.jdk.CollectionConverters._
 import scala.concurrent.{ExecutionContext, Future}
+import scala.jdk.CollectionConverters._
+import scala.util.Try
 
 //TODO: clean up sample objects...
 object SampleNodes {
@@ -80,7 +82,7 @@ object SampleNodes {
 
   @JsonCodec case class SimpleJsonRecord(id: String, field: String)
 
-  class IntParamSourceFactory extends SourceFactory {
+  class IntParamSourceFactory extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke
     def create(@ParamName("param") param: Int) =
@@ -95,10 +97,10 @@ object SampleNodes {
       with LazyParameterInterpreterFunction {
 
     @transient lazy val end1Interpreter: Context => AnyRef =
-      lazyParameterInterpreter.syncInterpretationFunction(valueByBranchId("end1"))
+      toEvaluateFunctionConverter.toEvaluateFunction(valueByBranchId("end1"))
 
     @transient lazy val end2Interpreter: Context => AnyRef =
-      lazyParameterInterpreter.syncInterpretationFunction(valueByBranchId("end2"))
+      toEvaluateFunctionConverter.toEvaluateFunction(valueByBranchId("end2"))
 
     override def flatMap1(ctx: Context, out: Collector[ValueWithContext[AnyRef]]): Unit = {
       val joinContext = ctx.appendIdSuffix("end1")
@@ -116,21 +118,23 @@ object SampleNodes {
 
   }
 
-  // data is static, to be able to track, Service is object, to initialize metrics properly...
-  class MockService extends Service with TimeMeasuringService {
+  class MockService(resultsHolder: => TestResultsHolder[Any])
+      extends Service
+      with TimeMeasuringService
+      with Serializable {
 
     val serviceName = "mockService"
 
     @MethodToInvoke
     def invoke(@ParamName("all") all: Any)(implicit ec: ExecutionContext): Future[Unit] = {
       measuring(Future.successful {
-        MockService.add(all)
+        resultsHolder.add(all)
       })
     }
 
   }
 
-  class EnricherWithOpenService extends Service with TimeMeasuringService {
+  class EnricherWithOpenService extends Service with TimeMeasuringService with Serializable {
 
     val serviceName = "enricherWithOpenService"
 
@@ -172,7 +176,7 @@ object SampleNodes {
 
   }
 
-  object LifecycleService extends Service with WithLifecycle {
+  object LifecycleService extends Service with WithLifecycle with Serializable {
 
     @MethodToInvoke
     def invoke(): Future[Unit] = {
@@ -181,8 +185,9 @@ object SampleNodes {
 
   }
 
-  object EagerLifecycleService extends EagerService with WithLifecycle {
+  object EagerLifecycleService extends EagerService with WithLifecycle with Serializable {
 
+    @transient
     var list: List[(String, WithLifecycle)] = Nil
 
     override def open(engineRuntimeContext: EngineRuntimeContext): Unit = {
@@ -201,12 +206,11 @@ object SampleNodes {
     }
 
     @MethodToInvoke
-    def invoke(@ParamName("name") name: String): ServiceInvoker = synchronized {
+    def prepare(@ParamName("name") name: String): ServiceInvoker = synchronized {
       val newI = new ServiceInvoker with WithLifecycle {
-        override def invokeService(params: Map[String, Any])(
+        override def invoke(context: Context)(
             implicit ec: ExecutionContext,
             collector: ServiceInvocationCollector,
-            contextId: ContextId,
             componentUseCase: ComponentUseCase
         ): Future[Any] = {
           if (!opened) {
@@ -222,21 +226,20 @@ object SampleNodes {
 
   }
 
-  object CollectingEagerService extends EagerService {
+  object CollectingEagerService extends EagerService with Serializable {
 
     @MethodToInvoke
-    def invoke(
+    def prepare(
         @ParamName("static") static: String,
         @ParamName("dynamic") dynamic: LazyParameter[String]
     ): ServiceInvoker = new ServiceInvoker {
 
-      override def invokeService(params: Map[String, Any])(
+      override def invoke(context: Context)(
           implicit ec: ExecutionContext,
           collector: ServiceInvocationCollector,
-          contextId: ContextId,
           componentUseCase: ComponentUseCase
       ): Future[Any] = {
-        collector.collect(s"static-$static-dynamic-${params("dynamic")}", Option(())) {
+        collector.collect(s"static-$static-dynamic-${dynamic.evaluate(context)}", Option(())) {
           Future.successful(())
         }
       }
@@ -245,7 +248,7 @@ object SampleNodes {
 
   }
 
-  object ServiceAcceptingScalaOption extends Service {
+  object ServiceAcceptingScalaOption extends Service with Serializable {
 
     @MethodToInvoke
     def invoke(@ParamName("scalaOptionParam") scalaOptionParam: Option[String]): Future[Option[String]] =
@@ -253,7 +256,7 @@ object SampleNodes {
 
   }
 
-  object StateCustomNode extends CustomStreamTransformer with ExplicitUidInOperatorsSupport {
+  object StateCustomNode extends CustomStreamTransformer with ExplicitUidInOperatorsSupport with Serializable {
 
     @MethodToInvoke(returnType = classOf[SimpleRecordWithPreviousValue])
     def execute(
@@ -281,7 +284,7 @@ object SampleNodes {
 
   }
 
-  object CustomFilter extends CustomStreamTransformer {
+  object CustomFilter extends CustomStreamTransformer with Serializable {
 
     @MethodToInvoke(returnType = classOf[Void])
     def execute(@ParamName("input") input: LazyParameter[String], @ParamName("stringVal") stringVal: String) =
@@ -298,7 +301,7 @@ object SampleNodes {
 
   }
 
-  object CustomFilterContextTransformation extends CustomStreamTransformer {
+  object CustomFilterContextTransformation extends CustomStreamTransformer with Serializable {
 
     @MethodToInvoke(returnType = classOf[Void])
     def execute(
@@ -322,7 +325,7 @@ object SampleNodes {
 
   }
 
-  object CustomContextClear extends CustomStreamTransformer {
+  object CustomContextClear extends CustomStreamTransformer with Serializable {
 
     @MethodToInvoke(returnType = classOf[Void])
     def execute(@ParamName("value") value: LazyParameter[String]) = {
@@ -343,7 +346,7 @@ object SampleNodes {
 
   }
 
-  object CustomJoin extends CustomStreamTransformer {
+  object CustomJoin extends CustomStreamTransformer with Serializable {
 
     @MethodToInvoke
     def execute(@OutputVariableName outputVarName: String)(implicit nodeId: NodeId): JoinContextTransformation = {
@@ -356,7 +359,8 @@ object SampleNodes {
               inputs: Map[String, DataStream[Context]],
               context: FlinkCustomNodeContext
           ): DataStream[ValueWithContext[AnyRef]] = {
-            val inputFromIr = (ir: Context) => ValueWithContext(ir.variables("input").asInstanceOf[AnyRef], ir)
+            val inputFromIr =
+              (ir: Context) => ValueWithContext(ir.variables("input").asInstanceOf[AnyRef], ir)
             inputs("end1")
               .connect(inputs("end2"))
               .map(new CoMapFunction[Context, Context, ValueWithContext[AnyRef]] {
@@ -369,7 +373,7 @@ object SampleNodes {
 
   }
 
-  object CustomJoinUsingBranchExpressions extends CustomStreamTransformer {
+  object CustomJoinUsingBranchExpressions extends CustomStreamTransformer with Serializable {
 
     @MethodToInvoke
     def execute(
@@ -378,8 +382,10 @@ object SampleNodes {
     ): JoinContextTransformation =
       ContextTransformation.join
         .definedBy { contexts =>
-          val newType = Typed(contexts.keys.toList.map(branchId => valueByBranchId(branchId).returnType): _*)
-          val parent  = contexts.values.flatMap(_.parent).headOption
+          val newType = Typed.fromIterableOrUnknownIfEmpty(
+            contexts.keys.toList.map(branchId => valueByBranchId(branchId).returnType)
+          )
+          val parent = contexts.values.flatMap(_.parent).headOption
           Valid(ValidationContext(Map(variableName -> newType), Map.empty, parent))
         }
         .implementedBy(new FlinkCustomJoinTransformation {
@@ -397,11 +403,14 @@ object SampleNodes {
 
   }
 
-  object ExtractAndTransformTimestamp extends CustomStreamTransformer {
+  object ExtractAndTransformTimestamp extends CustomStreamTransformer with Serializable {
 
     @MethodToInvoke(returnType = classOf[Long])
     def methodToInvoke(@ParamName("timestampToSet") timestampToSet: Long): FlinkCustomStreamTransformation = {
-      def trans(str: DataStream[Context], ctx: FlinkCustomNodeContext): DataStream[ValueWithContext[AnyRef]] = {
+      def trans(
+          str: DataStream[Context],
+          ctx: FlinkCustomNodeContext
+      ): DataStream[ValueWithContext[AnyRef]] = {
         val streamOperator = new AbstractStreamOperator[ValueWithContext[AnyRef]]
           with OneInputStreamOperator[Context, ValueWithContext[AnyRef]] {
           override def processElement(element: StreamRecord[Context]): Unit = {
@@ -419,7 +428,7 @@ object SampleNodes {
 
   }
 
-  object ReturningDependentTypeService extends EagerService {
+  object ReturningDependentTypeService extends EagerService with Serializable {
 
     @MethodToInvoke
     def invoke(
@@ -428,21 +437,20 @@ object SampleNodes {
         @ParamName("count") count: Int,
         @OutputVariableName outputVar: String
     )(implicit nodeId: NodeId): ContextTransformation = {
-      val listType                        = TypedObjectTypingResult(definition.asScala.map(_ -> Typed[String]).toMap)
+      val listType                        = Typed.record(definition.asScala.map(_ -> Typed[String]).toMap)
       val returnType: typing.TypingResult = Typed.genericTypeClass[java.util.List[_]](List(listType))
 
       EnricherContextTransformation(
         outputVar,
         returnType,
         new ServiceInvoker {
-          override def invokeService(params: Map[String, Any])(
+          override def invoke(context: Context)(
               implicit ec: ExecutionContext,
               collector: ServiceInvocationCollector,
-              contextId: ContextId,
               componentUseCase: ComponentUseCase
           ): Future[Any] = {
             val result = (1 to count)
-              .map(_ => definition.asScala.map(_ -> params("toFill").asInstanceOf[String]).toMap)
+              .map(_ => definition.asScala.map(_ -> toFill.evaluate(context)).toMap)
               .map(TypedMap(_))
               .toList
               .asJava
@@ -474,7 +482,7 @@ object SampleNodes {
 
   }
 
-  class ThrowingService(exception: Exception) extends Service {
+  class ThrowingService(exception: Exception) extends Service with Serializable {
 
     @MethodToInvoke
     def invoke(@ParamName("throw") throwing: Boolean): Future[String] = {
@@ -485,7 +493,7 @@ object SampleNodes {
 
   }
 
-  object TransformerWithTime extends CustomStreamTransformer {
+  object TransformerWithTime extends CustomStreamTransformer with Serializable {
 
     @MethodToInvoke
     def execute(@OutputVariableName outputVarName: String, @ParamName("seconds") seconds: Int)(
@@ -510,7 +518,7 @@ object SampleNodes {
 
   }
 
-  object TransformerWithNullableParam extends CustomStreamTransformer {
+  object TransformerWithNullableParam extends CustomStreamTransformer with Serializable {
 
     @MethodToInvoke(returnType = classOf[String])
     def execute(@ParamName("param") @Nullable param: LazyParameter[String]) =
@@ -521,7 +529,7 @@ object SampleNodes {
 
   }
 
-  object TransformerAddingComponentUseCase extends CustomStreamTransformer {
+  object TransformerAddingComponentUseCase extends CustomStreamTransformer with Serializable {
 
     @MethodToInvoke
     def execute = {
@@ -537,7 +545,9 @@ object SampleNodes {
 
   }
 
-  object OptionalEndingCustom extends CustomStreamTransformer {
+  class OptionalEndingCustom(resultsHolder: => TestResultsHolder[AnyRef])
+      extends CustomStreamTransformer
+      with Serializable {
 
     override def canBeEnding: Boolean = true
 
@@ -548,7 +558,7 @@ object SampleNodes {
           .flatMap(context.lazyParameterHelper.lazyMapFunction[AnyRef](param))
         afterMap.addSink(new SinkFunction[ValueWithContext[AnyRef]] {
           override def invoke(value: ValueWithContext[AnyRef], context: SinkFunction.Context): Unit = {
-            MockService.add(value.value)
+            resultsHolder.add(value.value)
           }
         })
         afterMap
@@ -556,7 +566,7 @@ object SampleNodes {
 
   }
 
-  object EagerOptionalParameterSinkFactory extends SinkFactory with WithDataList[String] {
+  class EagerOptionalParameterSinkFactory(resultsHolder: => TestResultsHolder[String]) extends SinkFactory {
 
     @MethodToInvoke
     def createSink(@ParamName("optionalStringParam") value: Optional[String]): Sink = new BasicFlinkSink {
@@ -570,7 +580,7 @@ object SampleNodes {
         (ctx, collector) => collector.collect(ValueWithContext(serializableValue, ctx))
 
       override def toFlinkFunction: SinkFunction[String] = new SinkFunction[String] {
-        override def invoke(value: String, context: SinkFunction.Context): Unit = add(value)
+        override def invoke(value: String, context: SinkFunction.Context): Unit = resultsHolder.add(value)
       }
 
       override type Value = String
@@ -578,9 +588,7 @@ object SampleNodes {
 
   }
 
-  object MockService extends Service with WithDataList[Any]
-
-  case object MonitorEmptySink extends EmptySink {
+  case object MonitorEmptySink extends EmptySink with Serializable {
 
     val invocationsCount = new AtomicInteger(0)
 
@@ -596,25 +604,38 @@ object SampleNodes {
 
   }
 
-  case object SinkForInts extends SinkForType[java.lang.Integer]
+  object SinkForInts {
+    def apply(resultsHolder: => TestResultsHolder[java.lang.Integer]): SinkFactory =
+      SinkForType[java.lang.Integer](resultsHolder)
+  }
 
-  case object SinkForStrings extends SinkForType[String]
+  object SinkForStrings {
+    def apply(resultsHolder: => TestResultsHolder[String]): SinkFactory = SinkForType[String](resultsHolder)
+  }
 
-  case object SinkForLongs extends SinkForType[java.lang.Long]
+  object SinkForLongs {
+    def apply(resultsHolder: => TestResultsHolder[java.lang.Long]): SinkFactory =
+      SinkForType[java.lang.Long](resultsHolder)
+  }
 
-  case object SinkForAny extends SinkForType[AnyRef]
+  object SinkForAny {
+    def apply(resultsHolder: => TestResultsHolder[AnyRef]): SinkFactory = SinkForType[AnyRef](resultsHolder)
+  }
 
-  object EmptyService extends Service {
+  object EmptyService extends Service with Serializable {
     def invoke(): Future[Unit] = Future.successful(())
   }
 
-  object GenericParametersNode extends CustomStreamTransformer with SingleInputGenericNodeTransformation[AnyRef] {
+  object GenericParametersNode
+      extends CustomStreamTransformer
+      with SingleInputDynamicComponent[AnyRef]
+      with Serializable {
 
     override type State = List[String]
 
     override def contextTransformation(context: ValidationContext, dependencies: List[NodeDependencyValue])(
         implicit nodeId: NodeId
-    ): this.NodeTransformationDefinition = {
+    ): this.ContextTransformationDefinition = {
       case TransformationStep(Nil, _) =>
         NextParameters(
           List(Parameter[String]("par1"), Parameter[java.lang.Boolean]("lazyPar1").copy(isLazyParameter = true))
@@ -635,7 +656,7 @@ object SampleNodes {
     )(implicit nodeId: NodeId): this.FinalResults = {
       dependencies.collectFirst { case OutputVariableNameValue(name) => name } match {
         case Some(name) =>
-          val result = TypedObjectTypingResult(rest.map { case (k, v) => k -> v.returnType }.toMap)
+          val result = Typed.record(rest.map { case (k, v) => k -> v.returnType }.toMap)
           FinalResults.forValidation(context)(_.withVariable(OutputVar.customNode(name), result))
         case None =>
           FinalResults(context, errors = List(CustomNodeError("Output not defined", None)))
@@ -643,16 +664,19 @@ object SampleNodes {
     }
 
     override def implementation(
-        params: Map[String, Any],
+        params: Params,
         dependencies: List[NodeDependencyValue],
         finalState: Option[State]
     ): AnyRef = {
-      val map  = params.filterNot(k => List("par1", "lazyPar1").contains(k._1))
-      val bool = params("lazyPar1").asInstanceOf[LazyParameter[java.lang.Boolean]]
+      val map  = params.nameToValueMap.filterNot(k => List("par1", "lazyPar1").contains(k._1))
+      val bool = params.extractUnsafe[LazyParameter[java.lang.Boolean]]("lazyPar1")
       FlinkCustomStreamTransformation((stream, fctx) => {
         stream
           .filter(new LazyParameterFilterFunction(bool, fctx.lazyParameterHelper))
-          .map((ctx: Context) => ValueWithContext[AnyRef](TypedMap(map), ctx), fctx.valueWithContextInfo.forUnknown)
+          .map(
+            (ctx: Context) => ValueWithContext[AnyRef](TypedMap(map), ctx),
+            fctx.valueWithContextInfo.forUnknown
+          )
       })
     }
 
@@ -663,7 +687,8 @@ object SampleNodes {
 
   object NodePassingStateToImplementation
       extends CustomStreamTransformer
-      with SingleInputGenericNodeTransformation[AnyRef] {
+      with SingleInputDynamicComponent[AnyRef]
+      with Serializable {
 
     val VariableThatshouldBeDefinedBeforeNodeName = "foo"
 
@@ -671,7 +696,7 @@ object SampleNodes {
 
     override def contextTransformation(context: ValidationContext, dependencies: List[NodeDependencyValue])(
         implicit nodeId: NodeId
-    ): this.NodeTransformationDefinition = { case TransformationStep(Nil, _) =>
+    ): this.ContextTransformationDefinition = { case TransformationStep(Nil, _) =>
       context
         .withVariable(OutputVar.customNode(OutputVariableNameDependency.extract(dependencies)), Typed[Boolean])
         .map(FinalResults(_, state = Some(context.contains(VariableThatshouldBeDefinedBeforeNodeName))))
@@ -679,7 +704,7 @@ object SampleNodes {
     }
 
     override def implementation(
-        params: Map[String, Any],
+        params: Params,
         dependencies: List[NodeDependencyValue],
         finalState: Option[State]
     ): AnyRef = {
@@ -696,13 +721,17 @@ object SampleNodes {
 
   }
 
-  object GenericParametersSource extends SourceFactory with SingleInputGenericNodeTransformation[Source] {
+  object GenericParametersSource
+      extends SourceFactory
+      with UnboundedStreamComponent
+      with SingleInputDynamicComponent[Source]
+      with Serializable {
 
     override type State = Nothing
 
     override def contextTransformation(context: ValidationContext, dependencies: List[NodeDependencyValue])(
         implicit nodeId: NodeId
-    ): this.NodeTransformationDefinition = {
+    ): this.ContextTransformationDefinition = {
       case TransformationStep(Nil, _) =>
         NextParameters(
           Parameter[String]("type")
@@ -742,18 +771,22 @@ object SampleNodes {
     }
 
     override def implementation(
-        params: Map[String, Any],
+        params: Params,
         dependencies: List[NodeDependencyValue],
         finalState: Option[State]
     ): Source = {
-      val out = "" + params("type") + "-" + params("version")
+      val out = s"${params.extractUnsafe("type")}-${params.extractUnsafe("version")}"
       CollectionSource(out :: Nil, None, Typed[String])
     }
 
     override def nodeDependencies: List[NodeDependency] = OutputVariableNameDependency :: Nil
   }
 
-  object GenericSourceWithCustomVariables extends SourceFactory with SingleInputGenericNodeTransformation[Source] {
+  object GenericSourceWithCustomVariables
+      extends SourceFactory
+      with UnboundedStreamComponent
+      with SingleInputDynamicComponent[Source]
+      with Serializable {
 
     private class CustomFlinkContextInitializer extends BasicContextInitializer[String](Typed[String]) {
 
@@ -801,19 +834,19 @@ object SampleNodes {
 
     override def contextTransformation(context: ValidationContext, dependencies: List[NodeDependencyValue])(
         implicit nodeId: NodeId
-    ): GenericSourceWithCustomVariables.NodeTransformationDefinition = {
+    ): GenericSourceWithCustomVariables.ContextTransformationDefinition = {
       case TransformationStep(Nil, _) => NextParameters(Parameter[java.util.List[String]](`elementsParamName`) :: Nil)
       case step @ TransformationStep((`elementsParamName`, _) :: Nil, None) =>
         FinalResults.forValidation(context)(customContextInitializer.validationContext)
     }
 
     override def implementation(
-        params: Map[String, Any],
+        params: Params,
         dependencies: List[NodeDependencyValue],
         finalState: Option[State]
     ): Source = {
       import scala.jdk.CollectionConverters._
-      val elements = params(`elementsParamName`).asInstanceOf[java.util.List[String]].asScala.toList
+      val elements = params.extractUnsafe[java.util.List[String]](`elementsParamName`).asScala.toList
 
       new CollectionSource(elements, None, Typed[String]) with TestDataGenerator with FlinkSourceTestSupport[String] {
 
@@ -832,7 +865,10 @@ object SampleNodes {
 
   }
 
-  object GenericParametersSink extends SinkFactory with SingleInputGenericNodeTransformation[Sink] {
+  class GenericParametersSink(resultsHolder: => TestResultsHolder[String])
+      extends SinkFactory
+      with SingleInputDynamicComponent[Sink]
+      with Serializable {
 
     private val componentUseCaseDependency = TypedNodeDependency[ComponentUseCase]
 
@@ -840,7 +876,7 @@ object SampleNodes {
 
     override def contextTransformation(context: ValidationContext, dependencies: List[NodeDependencyValue])(
         implicit nodeId: NodeId
-    ): this.NodeTransformationDefinition = {
+    ): this.ContextTransformationDefinition = {
       case TransformationStep(Nil, _) =>
         NextParameters(
           Parameter[String]("value").copy(isLazyParameter = true) :: Parameter[String]("type")
@@ -869,15 +905,15 @@ object SampleNodes {
     }
 
     override def implementation(
-        params: Map[String, Any],
+        params: Params,
         dependencies: List[NodeDependencyValue],
         finalState: Option[State]
     ): FlinkSink = new FlinkSink {
 
       type Value = String
 
-      private val typ     = params("type")
-      private val version = params("version")
+      private val typ     = params.extractUnsafe[String]("type")
+      private val version = params.extractUnsafe[Integer]("version")
 
       override def prepareValue(
           dataStream: DataStream[Context],
@@ -885,7 +921,8 @@ object SampleNodes {
       ): DataStream[ValueWithContext[Value]] = {
         dataStream
           .flatMap(
-            flinkNodeContext.lazyParameterHelper.lazyMapFunction(params("value").asInstanceOf[LazyParameter[String]])
+            flinkNodeContext.lazyParameterHelper
+              .lazyMapFunction(params.extractUnsafe[LazyParameter[String]]("value"))
           )
           .map(
             (v: ValueWithContext[String]) =>
@@ -900,7 +937,7 @@ object SampleNodes {
           dataStream: DataStream[ValueWithContext[String]],
           flinkNodeContext: FlinkCustomNodeContext
       ): DataStreamSink[_] =
-        dataStream.map(_.value).addSink(SinkForStrings.toSinkFunction)
+        dataStream.map(_.value).addSink(new SinkForTypeFunction[String](resultsHolder))
 
     }
 
@@ -944,16 +981,17 @@ object SampleNodes {
 
   }
 
-  def simpleRecordSource(data: List[SimpleRecord]): SourceFactory = SourceFactory.noParam[SimpleRecord](
-    new CollectionSource[SimpleRecord](data, Some(ascendingTimestampExtractor), Typed[SimpleRecord])
-      with FlinkSourceTestSupport[SimpleRecord] {
-      override def testRecordParser: TestRecordParser[SimpleRecord] = simpleRecordParser
+  def simpleRecordSource(data: List[SimpleRecord]): SourceFactory =
+    SourceFactory.noParamUnboundedStreamFactory[SimpleRecord](
+      new CollectionSource[SimpleRecord](data, Some(ascendingTimestampExtractor), Typed[SimpleRecord])
+        with FlinkSourceTestSupport[SimpleRecord] {
+        override def testRecordParser: TestRecordParser[SimpleRecord] = simpleRecordParser
 
-      override def timestampAssignerForTest: Option[TimestampWatermarkHandler[SimpleRecord]] = timestampAssigner
-    }
-  )
+        override def timestampAssignerForTest: Option[TimestampWatermarkHandler[SimpleRecord]] = timestampAssigner
+      }
+    )
 
-  val jsonSource: SourceFactory = SourceFactory.noParam[SimpleJsonRecord](
+  val jsonSource: SourceFactory = SourceFactory.noParamUnboundedStreamFactory[SimpleJsonRecord](
     new CollectionSource[SimpleJsonRecord](List(), None, Typed[SimpleJsonRecord])
       with FlinkSourceTestSupport[SimpleJsonRecord] {
 
@@ -965,7 +1003,7 @@ object SampleNodes {
     }
   )
 
-  object TypedJsonSource extends SourceFactory with ReturningType {
+  object TypedJsonSource extends SourceFactory with UnboundedStreamComponent with ReturningType with Serializable {
 
     @MethodToInvoke
     def create(
@@ -992,7 +1030,7 @@ object SampleNodes {
 
   @JsonCodec case class KeyValue(key: String, value: Int, date: Long)
 
-  object ReturningComponentUseCaseService extends Service {
+  object ReturningComponentUseCaseService extends Service with Serializable {
 
     @MethodToInvoke
     def invoke(implicit componentUseCase: ComponentUseCase): Future[ComponentUseCase] = {
@@ -1015,6 +1053,64 @@ object SampleNodes {
 
     override def nodeEntered(nodeId: String, context: Context, processMetaData: MetaData): Unit = {
       if (listening) nodesEntered = nodesEntered ::: nodeId :: Nil
+    }
+
+  }
+
+  class LifecycleCheckingListener extends ProcessListener with Lifecycle {
+
+    @transient @volatile private var opened = false
+    @transient @volatile private var closed = false
+
+    override def open(context: EngineRuntimeContext): Unit = {
+      opened = true
+    }
+
+    override def close(): Unit = {
+      closed = true
+    }
+
+    override def nodeEntered(nodeId: String, context: Context, processMetaData: MetaData): Unit =
+      checkValidState("nodeEntered")
+
+    override def endEncountered(
+        nodeId: String,
+        ref: String,
+        context: Context,
+        processMetaData: MetaData
+    ): Unit =
+      checkValidState("endEncountered")
+
+    override def deadEndEncountered(lastNodeId: String, context: Context, processMetaData: MetaData): Unit =
+      checkValidState("deadEndEncountered")
+
+    override def expressionEvaluated(
+        nodeId: String,
+        expressionId: String,
+        expression: String,
+        context: Context,
+        processMetaData: MetaData,
+        result: Any
+    ): Unit =
+      checkValidState("expressionEvaluated")
+
+    override def serviceInvoked(
+        nodeId: String,
+        id: String,
+        context: Context,
+        processMetaData: MetaData,
+        result: Try[Any]
+    ): Unit =
+      checkValidState("serviceInvoked")
+
+    override def exceptionThrown(exceptionInfo: NuExceptionInfo[_ <: Throwable]): Unit =
+      checkValidState("exceptionThrown")
+
+    private def checkValidState(operation: String): Unit = {
+      if (!opened)
+        throw new IllegalStateException(s"For operation: $operation, ${getClass.getSimpleName} wasn't opened")
+      if (closed)
+        throw new IllegalStateException(s"For operation: $operation, ${getClass.getSimpleName} was already closed")
     }
 
   }

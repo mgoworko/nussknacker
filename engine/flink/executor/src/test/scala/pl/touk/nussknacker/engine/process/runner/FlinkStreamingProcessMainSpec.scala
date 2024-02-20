@@ -9,7 +9,12 @@ import pl.touk.nussknacker.engine.api._
 import pl.touk.nussknacker.engine.api.process._
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.deployment.DeploymentData
+import pl.touk.nussknacker.engine.process.helpers.TestResultsHolder
 import pl.touk.nussknacker.engine.process.helpers.SampleNodes._
+import pl.touk.nussknacker.engine.process.runner.SimpleProcessConfigCreator.{
+  sinkForIntsResultsHolder,
+  valueMonitorResultsHolder
+}
 import pl.touk.nussknacker.engine.spel
 
 import java.net.ConnectException
@@ -40,7 +45,7 @@ class FlinkStreamingProcessMainSpec extends AnyFlatSpec with Matchers with Insid
 
 class SimpleProcessConfigCreator extends EmptyProcessConfigCreator {
 
-  override def services(processObjectDependencies: ProcessObjectDependencies): Map[String, WithCategories[Service]] =
+  override def services(modelDependencies: ProcessObjectDependencies): Map[String, WithCategories[Service]] =
     Map(
       "logService"      -> WithCategories(LogService, "c1"),
       "throwingService" -> WithCategories(new ThrowingService(new RuntimeException("Thrown as expected")), "c1"),
@@ -51,15 +56,15 @@ class SimpleProcessConfigCreator extends EmptyProcessConfigCreator {
     )
 
   override def sinkFactories(
-      processObjectDependencies: ProcessObjectDependencies
+      modelDependencies: ProcessObjectDependencies
   ): Map[String, WithCategories[SinkFactory]] = Map(
     "monitor"      -> WithCategories(SinkFactory.noParam(MonitorEmptySink), "c2"),
-    "valueMonitor" -> WithCategories(SinkForAny.toSinkFactory, "c2"),
-    "sinkForInts"  -> WithCategories.anyCategory(SinkForInts.toSinkFactory)
+    "valueMonitor" -> WithCategories(SinkForAny(valueMonitorResultsHolder), "c2"),
+    "sinkForInts"  -> WithCategories.anyCategory(SinkForInts(sinkForIntsResultsHolder))
   )
 
   override def customStreamTransformers(
-      processObjectDependencies: ProcessObjectDependencies
+      modelDependencies: ProcessObjectDependencies
   ): Map[String, WithCategories[CustomStreamTransformer]] = Map(
     "stateCustom"                       -> WithCategories.anyCategory(StateCustomNode),
     "transformWithTime"                 -> WithCategories.anyCategory(TransformerWithTime),
@@ -68,12 +73,19 @@ class SimpleProcessConfigCreator extends EmptyProcessConfigCreator {
   )
 
   override def sourceFactories(
-      processObjectDependencies: ProcessObjectDependencies
+      modelDependencies: ProcessObjectDependencies
   ): Map[String, WithCategories[SourceFactory]] = Map(
     "input"                            -> WithCategories(simpleRecordSource(Nil), "cat2"),
     "jsonInput"                        -> WithCategories(jsonSource, "cat2"),
     "typedJsonInput"                   -> WithCategories(TypedJsonSource, "cat2"),
     "genericSourceWithCustomVariables" -> WithCategories.anyCategory(GenericSourceWithCustomVariables)
   )
+
+}
+
+object SimpleProcessConfigCreator extends Serializable {
+
+  val valueMonitorResultsHolder = new TestResultsHolder[AnyRef]
+  val sinkForIntsResultsHolder  = new TestResultsHolder[java.lang.Integer]
 
 }

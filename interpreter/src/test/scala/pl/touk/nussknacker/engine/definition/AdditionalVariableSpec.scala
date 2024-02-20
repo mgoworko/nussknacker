@@ -4,9 +4,11 @@ import com.typesafe.config.ConfigFactory
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import pl.touk.nussknacker.engine.api._
+import pl.touk.nussknacker.engine.api.component.ComponentDefinition
+import pl.touk.nussknacker.engine.api.component.UnboundedStreamComponent
 import pl.touk.nussknacker.engine.api.context.ProcessCompilationError.CannotCreateObjectError
 import pl.touk.nussknacker.engine.api.context.ValidationContext
-import pl.touk.nussknacker.engine.api.context.transformation.{NodeDependencyValue, SingleInputGenericNodeTransformation}
+import pl.touk.nussknacker.engine.api.context.transformation.{NodeDependencyValue, SingleInputDynamicComponent}
 import pl.touk.nussknacker.engine.api.definition.{
   AdditionalVariableProvidedInRuntime,
   AdditionalVariableWithFixedValue,
@@ -17,12 +19,13 @@ import pl.touk.nussknacker.engine.api.process._
 import pl.touk.nussknacker.engine.api.typed.typing.Typed
 import pl.touk.nussknacker.engine.compile.FragmentResolver
 import pl.touk.nussknacker.engine.compile.nodecompilation.{NodeDataValidator, ValidationPerformed}
-import pl.touk.nussknacker.engine.definition.DefinitionExtractor.StandardObjectWithMethodDef
-import pl.touk.nussknacker.engine.graph.{evaluatedparam, node}
+import pl.touk.nussknacker.engine.definition.component.ComponentDefinitionWithImplementation
+import pl.touk.nussknacker.engine.definition.component.methodbased.MethodBasedComponentDefinitionWithImplementation
+import pl.touk.nussknacker.engine.graph.evaluatedparam.{Parameter => NodeParameter}
+import pl.touk.nussknacker.engine.graph.node
 import pl.touk.nussknacker.engine.graph.source.SourceRef
 import pl.touk.nussknacker.engine.spel.Implicits._
 import pl.touk.nussknacker.engine.testing.LocalModelData
-import pl.touk.nussknacker.engine.util.namespaces.DefaultNamespacedObjectNaming
 
 class AdditionalVariableSpec extends AnyFunSuite with Matchers {
 
@@ -42,13 +45,17 @@ class AdditionalVariableSpec extends AnyFunSuite with Matchers {
   }
 
   test("doesn't allow LazyParameter with fixed value") {
-    val modelData        = LocalModelData(ConfigFactory.empty(), new CreatorWithComponent(new IncorrectService2))
+    val modelData = LocalModelData(
+      ConfigFactory.empty(),
+      List(ComponentDefinition("one", new IncorrectService2))
+    )
     val fragmentResolver = FragmentResolver(List.empty)
-    val result = new NodeDataValidator(modelData, fragmentResolver).validate(
-      node.Source("sid", SourceRef("one", evaluatedparam.Parameter("toFail", "''") :: Nil)),
+    val result = new NodeDataValidator(modelData).validate(
+      node.Source("sid", SourceRef("one", NodeParameter("toFail", "''") :: Nil)),
       ValidationContext.empty,
       Map.empty,
-      Nil
+      Nil,
+      fragmentResolver
     )(MetaData("scenario", StreamMetaData()))
     result.asInstanceOf[ValidationPerformed].errors.distinct shouldBe CannotCreateObjectError(
       "AdditionalVariableWithFixedValue should not be used with LazyParameters",
@@ -58,21 +65,13 @@ class AdditionalVariableSpec extends AnyFunSuite with Matchers {
   }
 
   private def definition(sourceFactory: SourceFactory): List[Parameter] = {
-    ProcessDefinitionExtractor
-      .extractObjectWithMethods(
-        new CreatorWithComponent(sourceFactory),
-        getClass.getClassLoader,
-        ProcessObjectDependencies(ConfigFactory.empty(), DefaultNamespacedObjectNaming),
-        category = None
-      )
-      .sourceFactories
-      .head
-      ._2
-      .asInstanceOf[StandardObjectWithMethodDef]
+    ComponentDefinitionWithImplementation
+      .withEmptyConfig("foo", sourceFactory)
+      .asInstanceOf[MethodBasedComponentDefinitionWithImplementation]
       .parameters
   }
 
-  class CorrectService extends SourceFactory {
+  class CorrectService extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke
     def invoke(
@@ -88,7 +87,7 @@ class AdditionalVariableSpec extends AnyFunSuite with Matchers {
 
   }
 
-  class IncorrectService1 extends SourceFactory {
+  class IncorrectService1 extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke
     def invoke(
@@ -100,13 +99,13 @@ class AdditionalVariableSpec extends AnyFunSuite with Matchers {
 
   }
 
-  class IncorrectService2 extends SourceFactory with SingleInputGenericNodeTransformation[Source] {
+  class IncorrectService2 extends SourceFactory with SingleInputDynamicComponent[Source] with UnboundedStreamComponent {
 
     override type State = Nothing
 
     override def contextTransformation(context: ValidationContext, dependencies: List[NodeDependencyValue])(
         implicit nodeId: NodeId
-    ): NodeTransformationDefinition = { case TransformationStep(Nil, _) =>
+    ): ContextTransformationDefinition = { case TransformationStep(Nil, _) =>
       NextParameters(
         List(
           Parameter[String]("toFail")
@@ -119,21 +118,12 @@ class AdditionalVariableSpec extends AnyFunSuite with Matchers {
     }
 
     override def implementation(
-        params: Map[String, Any],
+        params: Params,
         dependencies: List[NodeDependencyValue],
         finalState: Option[Nothing]
     ): Source = null
 
     override def nodeDependencies: List[NodeDependency] = Nil
-
-  }
-
-  class CreatorWithComponent(component: SourceFactory) extends EmptyProcessConfigCreator {
-
-    override def sourceFactories(
-        processObjectDependencies: ProcessObjectDependencies
-    ): Map[String, WithCategories[SourceFactory]] =
-      Map("one" -> WithCategories.anyCategory(component))
 
   }
 

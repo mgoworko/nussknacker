@@ -9,7 +9,8 @@ import org.scalatest.tags.Slow
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, OptionValues}
 import pl.touk.nussknacker.engine.api.process.ProcessName
 import pl.touk.nussknacker.test.PatientScalaFutures
-import pl.touk.nussknacker.ui.api.helpers.{NuResourcesTest, SampleProcess}
+import pl.touk.nussknacker.test.base.it.NuResourcesTest
+import pl.touk.nussknacker.test.utils.domain.ProcessTestData
 
 import scala.jdk.CollectionConverters._
 
@@ -26,10 +27,11 @@ class ManagementResourcesConcurrentSpec
     with NuResourcesTest {
 
   test("not allow concurrent deployment of same process") {
-    val processName = s"sameConcurrentDeployments"
-    saveProcessAndAssertSuccess(processName, SampleProcess.process)
+    val processName = ProcessName(s"sameConcurrentDeployments")
+    val scenario    = ProcessTestData.sampleScenario.withProcessName(processName)
+    saveCanonicalProcessAndAssertSuccess(scenario)
 
-    deploymentManager.withWaitForDeployFinish(ProcessName(processName)) {
+    deploymentManager.withWaitForDeployFinish(processName) {
       val firstDeployResult  = deployProcess(processName)
       val secondDeployResult = deployProcess(processName)
       eventually {
@@ -47,20 +49,21 @@ class ManagementResourcesConcurrentSpec
       val statuses = List(firstStatus, secondStatus)
       statuses should contain only (StatusCodes.OK, StatusCodes.Conflict)
       eventually {
-        deploymentManager.deploys.asScala.count(_ == ProcessName(processName)) shouldBe 1
+        deploymentManager.deploys.asScala.count(_ == processName) shouldBe 1
       }
     }
   }
 
   test("allow concurrent deployment and cancel of same process") {
-    val processName = "concurrentDeployAndCancel"
+    val processName = ProcessName("concurrentDeployAndCancel")
 
-    saveProcessAndAssertSuccess(processName, SampleProcess.process)
-    deploymentManager.withWaitForDeployFinish(ProcessName(processName)) {
+    val scenario = ProcessTestData.sampleScenario.withProcessName(processName)
+    saveCanonicalProcessAndAssertSuccess(scenario)
+    deploymentManager.withWaitForDeployFinish(processName) {
       val firstDeployResult = deployProcess(processName)
       // we have to check if deploy was invoke, otherwise cancel can be faster than deploy
       eventually {
-        deploymentManager.deploys.asScala.count(_ == ProcessName(processName)) shouldBe 1
+        deploymentManager.deploys.asScala.count(_ == processName) shouldBe 1
       }
       cancelProcess(processName) ~> check {
         status shouldBe StatusCodes.OK

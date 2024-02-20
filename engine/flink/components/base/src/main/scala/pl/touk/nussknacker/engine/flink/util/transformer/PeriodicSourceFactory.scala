@@ -7,6 +7,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
 import org.apache.flink.streaming.api.functions.source.SourceFunction
 import org.apache.flink.util.Collector
 import pl.touk.nussknacker.engine.api._
+import pl.touk.nussknacker.engine.api.component.UnboundedStreamComponent
 import pl.touk.nussknacker.engine.api.process.{BasicContextInitializer, Source, SourceFactory}
 import pl.touk.nussknacker.engine.api.typed.typing.Unknown
 import pl.touk.nussknacker.engine.api.typed.{ReturningType, typing}
@@ -39,7 +40,9 @@ object PeriodicSourceFactory
       )
     )
 
-class PeriodicSourceFactory(timestampAssigner: TimestampWatermarkHandler[AnyRef]) extends SourceFactory {
+class PeriodicSourceFactory(timestampAssigner: TimestampWatermarkHandler[AnyRef])
+    extends SourceFactory
+    with UnboundedStreamComponent {
 
   @MethodToInvoke
   def create(
@@ -55,11 +58,11 @@ class PeriodicSourceFactory(timestampAssigner: TimestampWatermarkHandler[AnyRef]
           flinkNodeContext: FlinkCustomNodeContext
       ): DataStream[Context] = {
 
-        val count     = Option(nullableCount).map(_.toInt).getOrElse(1)
-        val processId = flinkNodeContext.metaData.id
+        val count       = Option(nullableCount).map(_.toInt).getOrElse(1)
+        val processName = flinkNodeContext.metaData.name
         val stream = env
           .addSource(new PeriodicFunction(period))
-          .map(_ => Context(processId))
+          .map(_ => Context(processName.value))
           .flatMap(flinkNodeContext.lazyParameterHelper.lazyMapFunction(value))
           .flatMap { (v: ValueWithContext[AnyRef], c: Collector[AnyRef]) =>
             1.to(count).map(_ => v.value).foreach(c.collect)

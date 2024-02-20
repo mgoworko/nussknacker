@@ -14,10 +14,11 @@ import { PanZoomPlugin } from "./PanZoomPlugin";
 import { RangeSelectedEventData, RangeSelectPlugin, SelectionMode } from "./RangeSelectPlugin";
 import { prepareSvg } from "./svg-export/prepareSvg";
 import * as GraphUtils from "./utils/graphUtils";
+import { handleGraphEvent } from "./utils/graphUtils";
 import { ComponentDragPreview } from "../ComponentDragPreview";
 import { rafThrottle } from "./rafThrottle";
 import { isEdgeEditable } from "../../common/EdgeUtils";
-import { NodeId, NodeType, Process, ProcessDefinitionData } from "../../types";
+import { NodeId, NodeType, ScenarioGraph, ProcessDefinitionData } from "../../types";
 import { Layout, NodePosition, Position } from "../../actions/nk";
 import { UserSettings } from "../../reducers/userSettings";
 import User from "../../common/models/User";
@@ -27,17 +28,17 @@ import ProcessUtils from "../../common/ProcessUtils";
 import { isTouchEvent, LONG_PRESS_TIME } from "../../helpers/detectDevice";
 import { batchGroupBy } from "../../reducers/graph/batchGroupBy";
 import { createUniqueArrowMarker } from "./arrowMarker";
-import { handleGraphEvent } from "./utils/graphUtils";
+import { Scenario } from "../Process/types";
 
-interface Props extends GraphProps {
+type Props = GraphProps & {
     processCategory: string;
     processDefinitionData: ProcessDefinitionData;
     loggedUser: Partial<User>;
     selectionState: NodeId[];
     userSettings: UserSettings;
-    showModalNodeDetails: (node: NodeType, process: Process, readonly?: boolean) => void;
+    showModalNodeDetails: (node: NodeType, scenario: Scenario, readonly?: boolean) => void;
     isPristine?: boolean;
-}
+};
 
 function handleActionOnLongPress<T extends dia.CellView>(
     shortPressAction: ((cellView: T, event: dia.Event) => void) | null,
@@ -114,7 +115,11 @@ export class Graph extends React.Component<Props> {
         // arrow id from paper is needed, so we have to mutate this
         paper.options.defaultLink = (cellView, magnet) => {
             // actual props are needed when link is created
-            const linkCreator = getDefaultLinkCreator(uniqueArrowMarker, this.props.processToDisplay, this.props.processDefinitionData);
+            const linkCreator = getDefaultLinkCreator(
+                uniqueArrowMarker,
+                this.props.scenario.scenarioGraph,
+                this.props.processDefinitionData,
+            );
             return linkCreator(cellView, magnet);
         };
 
@@ -146,6 +151,7 @@ export class Graph extends React.Component<Props> {
                     }
                 })
                 .on(Events.LINK_CONNECT, (linkView: dia.LinkView, evt: dia.Event, targetView: dia.CellView, targetMagnet: SVGElement) => {
+                    if (this.props.isFragment === true) return;
                     const isReversed = targetMagnet?.getAttribute("port") === "Out";
                     const sourceView = linkView.getEndView("source");
                     const type = linkView.model.attributes.edgeData?.edgeType;
@@ -168,10 +174,10 @@ export class Graph extends React.Component<Props> {
         return linkBelowCell;
     }
 
-    drawGraph = (process: Process, layout: Layout, processDefinitionData: ProcessDefinitionData): void => {
+    drawGraph = (scenarioGraph: ScenarioGraph, layout: Layout, processDefinitionData: ProcessDefinitionData): void => {
         this.redrawing = true;
 
-        applyCellChanges(this.processGraphPaper, process, processDefinitionData);
+        applyCellChanges(this.processGraphPaper, scenarioGraph, processDefinitionData);
 
         if (isEmpty(layout)) {
             this.directedLayout();
@@ -182,12 +188,11 @@ export class Graph extends React.Component<Props> {
     };
 
     setEspGraphRef = (instance: HTMLElement): void => {
-        const { connectDropTarget } = this.props;
         this.instance = instance;
-        if (connectDropTarget && instance) {
+        if (this.props.isFragment !== true && this.props.connectDropTarget && instance) {
             // eslint-disable-next-line react/no-find-dom-node
             const node = findDOMNode(instance);
-            connectDropTarget(node);
+            this.props.connectDropTarget(node);
         }
     };
     graph: dia.Graph;
@@ -236,22 +241,23 @@ export class Graph extends React.Component<Props> {
 
     bindEventHandlers(): void {
         const showNodeDetails = (cellView: dia.CellView) => {
-            const { processToDisplay, readonly, nodeIdPrefixForFragmentTests = "" } = this.props;
+            const { scenario, readonly, nodeIdPrefixForFragmentTests = "" } = this.props;
             const { nodeData, edgeData } = cellView.model.attributes;
             const nodeId = nodeData?.id || (isEdgeEditable(edgeData) ? edgeData.from : null);
             if (nodeId) {
                 this.props.showModalNodeDetails(
                     {
-                        ...NodeUtils.getNodeById(nodeId, processToDisplay),
+                        ...NodeUtils.getNodeById(nodeId, scenario.scenarioGraph),
                         id: nodeIdPrefixForFragmentTests + nodeId,
                     },
-                    processToDisplay,
+                    scenario,
                     readonly,
                 );
             }
         };
 
         const selectNode = (cellView: dia.CellView, evt: dia.Event) => {
+            if (this.props.isFragment === true) return;
             if (this.props.nodeSelectionEnabled) {
                 const nodeDataId = cellView.model.attributes.nodeData?.id;
                 if (!nodeDataId) {
@@ -270,7 +276,7 @@ export class Graph extends React.Component<Props> {
             if (event.isPropagationStopped()) {
                 return;
             }
-            if (this.props.fetchedProcessDetails) {
+            if (this.props.isFragment !== true) {
                 this.props.resetSelection();
             }
         };
@@ -296,21 +302,22 @@ export class Graph extends React.Component<Props> {
 
     componentDidMount(): void {
         this.processGraphPaper = this.createPaper();
-        this.drawGraph(this.props.processToDisplay, this.props.layout, this.props.processDefinitionData);
+        this.drawGraph(this.props.scenario.scenarioGraph, this.props.layout, this.props.processDefinitionData);
         this.processGraphPaper.unfreeze();
         this._prepareContentForExport();
 
         // event handlers binding below. order sometimes matters
         this.panAndZoom = new PanZoomPlugin(this.processGraphPaper);
 
-        if (this.props.nodeSelectionEnabled) {
+        if (this.props.isFragment !== true && this.props.nodeSelectionEnabled) {
+            const { toggleSelection, resetSelection } = this.props;
             new RangeSelectPlugin(this.processGraphPaper, this.panAndZoom.getPinchEventActive);
             this.processGraphPaper.on("rangeSelect:selected", ({ elements, mode }: RangeSelectedEventData) => {
                 const nodes = elements.filter((el) => isModelElement(el)).map(({ id }) => id.toString());
                 if (mode === SelectionMode.toggle) {
-                    this.props.toggleSelection(...nodes);
+                    toggleSelection(...nodes);
                 } else {
-                    this.props.resetSelection(...nodes);
+                    resetSelection(...nodes);
                 }
             });
         }
@@ -335,16 +342,13 @@ export class Graph extends React.Component<Props> {
         this.panAndZoom.fitSmallAndLargeGraphs();
     }
 
-    canAddNode(node: NodeType): boolean {
-        return (
-            this.props.capabilities.editFrontend &&
-            NodeUtils.isNode(node) &&
-            NodeUtils.isAvailable(node, this.props.processDefinitionData, this.props.processCategory)
-        );
-    }
-
     addNode(node: NodeType, position: Position): void {
-        if (this.canAddNode(node)) {
+        if (this.props.isFragment === true) return;
+
+        const canAddNode =
+            this.props.capabilities.editFrontend && NodeUtils.isNode(node) && NodeUtils.isAvailable(node, this.props.processDefinitionData);
+
+        if (canAddNode) {
             this.props.nodeAdded(node, position);
         }
     }
@@ -352,17 +356,18 @@ export class Graph extends React.Component<Props> {
     // eslint-disable-next-line react/no-deprecated
     componentWillUpdate(nextProps: Props): void {
         const processChanged =
-            !isEqual(this.props.processToDisplay, nextProps.processToDisplay) ||
+            !isEqual(this.props.scenario.scenarioGraph, nextProps.scenario.scenarioGraph) ||
+            !isEqual(this.props.scenario.validationResult, nextProps.scenario.validationResult) ||
             !isEqual(this.props.layout, nextProps.layout) ||
             !isEqual(this.props.processDefinitionData, nextProps.processDefinitionData);
         if (processChanged) {
-            this.drawGraph(nextProps.processToDisplay, nextProps.layout, nextProps.processDefinitionData);
+            this.drawGraph(nextProps.scenario.scenarioGraph, nextProps.layout, nextProps.processDefinitionData);
         }
 
         //when e.g. layout changed we have to remember to highlight nodes
         const selectedNodesChanged = !isEqual(this.props.selectionState, nextProps.selectionState);
         if (processChanged || selectedNodesChanged) {
-            this.highlightNodes(nextProps.selectionState, nextProps.processToDisplay);
+            this.highlightNodes(nextProps.selectionState, nextProps.scenario);
         }
     }
 
@@ -371,8 +376,10 @@ export class Graph extends React.Component<Props> {
         if (!isEqual(processCounts, prevProps.processCounts)) {
             this.updateNodesCounts();
         }
-        if (this.props.isDraggingOver !== prevProps.isDraggingOver) {
-            this.highlightHoveredLink(!this.props.isDraggingOver);
+        if (this.props.isFragment !== true && prevProps.isFragment !== true) {
+            if (this.props.isDraggingOver !== prevProps.isDraggingOver) {
+                this.highlightHoveredLink(!this.props.isDraggingOver);
+            }
         }
         if (this.props.isPristine) {
             this._prepareContentForExport();
@@ -424,43 +431,45 @@ export class Graph extends React.Component<Props> {
         const from = source.id.toString();
         const to = target.id.toString();
         const previousEdge = linkView.model.attributes.edgeData || {};
-        const { processToDisplay, processDefinitionData } = this.props;
-        return NodeUtils.canMakeLink(from, to, processToDisplay, processDefinitionData, previousEdge);
+        const { scenario, processDefinitionData } = this.props;
+        return NodeUtils.canMakeLink(from, to, scenario.scenarioGraph, processDefinitionData, previousEdge);
     };
 
     validateMagnet = ({ model }: dia.CellView, magnet: SVGElement) => {
-        const { processToDisplay, processDefinitionData } = this.props;
-        const from = NodeUtils.getNodeById(model.id.toString(), processToDisplay);
+        const { scenario, processDefinitionData } = this.props;
+        const from = NodeUtils.getNodeById(model.id.toString(), scenario.scenarioGraph);
         const port = magnet.getAttribute("port");
         if (port === "Out") {
-            const nodeOutputs = NodeUtils.nodeOutputs(from.id, processToDisplay);
+            const nodeOutputs = NodeUtils.nodeOutputs(from.id, scenario.scenarioGraph);
             return NodeUtils.canHaveMoreOutputs(from, nodeOutputs, processDefinitionData);
         }
         if (port === "In") {
-            const nodeInputs = NodeUtils.nodeInputs(from.id, processToDisplay);
+            const nodeInputs = NodeUtils.nodeInputs(from.id, scenario.scenarioGraph);
             return NodeUtils.canHaveMoreInputs(from, nodeInputs, processDefinitionData);
         }
     };
 
     disconnectPreviousEdge = (from: NodeId, to: NodeId): void => {
-        if (this.graphContainsEdge(from, to)) {
+        if (this.props.isFragment !== true && this.graphContainsEdge(from, to)) {
             this.props.nodesDisconnected(from, to);
         }
     };
 
     graphContainsEdge(from: NodeId, to: NodeId): boolean {
-        return this.props.processToDisplay.edges.some((edge) => edge.from === from && edge.to === to);
+        return this.props.scenario.scenarioGraph.edges.some((edge) => edge.from === from && edge.to === to);
     }
 
     handleInjectBetweenNodes = (middleMan: shapes.devs.Model, linkBelowCell?: dia.Link): void => {
-        const { processToDisplay, injectNode, processDefinitionData } = this.props;
+        if (this.props.isFragment === true) return;
+
+        const { scenario, injectNode, processDefinitionData } = this.props;
 
         if (linkBelowCell && middleMan) {
             const { sourceNode, targetNode } = getLinkNodes(linkBelowCell);
             const middleManNode = middleMan.get("nodeData");
 
             const canInjectNode = GraphUtils.canInjectNode(
-                processToDisplay,
+                scenario.scenarioGraph,
                 sourceNode.id,
                 middleManNode.id,
                 targetNode.id,
@@ -481,7 +490,7 @@ export class Graph extends React.Component<Props> {
         };
     };
 
-    highlightNodes = (selectedNodeIds: string[] = [], process = this.props.processToDisplay): void => {
+    highlightNodes = (selectedNodeIds: string[] = [], process = this.props.scenario): void => {
         this.processGraphPaper.freeze();
         const elements = this.graph.getElements();
         elements.forEach((cell) => {
@@ -490,7 +499,8 @@ export class Graph extends React.Component<Props> {
             this.unhighlightCell(cell, "node-focused-with-validation-error");
         });
 
-        const invalidNodeIds = keys(ProcessUtils.getValidationErrors(process)?.invalidNodes);
+        const validationErrors = ProcessUtils.getValidationErrors(process);
+        const invalidNodeIds = [...keys(validationErrors?.invalidNodes), ...validationErrors.globalErrors.flatMap((e) => e.nodeIds)];
 
         // fast indicator for loose nodes, faster than async validation
         elements.forEach((el) => {
@@ -541,11 +551,9 @@ export class Graph extends React.Component<Props> {
     };
 
     changeLayoutIfNeeded = (): void => {
-        const { layout, layoutChanged, isFragment } = this.props;
+        if (this.props.isFragment === true) return;
 
-        if (isFragment) {
-            return;
-        }
+        const { layout, layoutChanged } = this.props;
 
         const elements = this.graph.getElements().filter(isModelElement);
         const collection = elements.map((el) => {
@@ -609,7 +617,7 @@ export class Graph extends React.Component<Props> {
 
     private bindNodeRemove() {
         this.graph.on(Events.REMOVE, (e: dia.Cell) => {
-            if (e.isLink() && !this.redrawing) {
+            if (this.props.isFragment !== true && !this.redrawing && e.isLink()) {
                 this.props.nodesDisconnected(e.attributes.source.id, e.attributes.target.id);
             }
         });

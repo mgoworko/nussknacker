@@ -4,7 +4,6 @@ import cats.data.Validated.{Invalid, Valid}
 import cats.data.{NonEmptyList, ValidatedNel}
 import com.typesafe.config.ConfigFactory
 import io.dropwizard.metrics5.MetricRegistry
-import org.scalatest.Inside.inside
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import pl.touk.nussknacker.engine.api.component.{ComponentType, NodeComponentInfo}
@@ -17,6 +16,8 @@ import pl.touk.nussknacker.engine.build.{GraphBuilder, ScenarioBuilder}
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.lite.api.commonTypes.ErrorType
 import pl.touk.nussknacker.engine.lite.api.runtimecontext.LiteEngineRuntimeContextPreparer
+import pl.touk.nussknacker.engine.lite.components.LiteBaseComponentProvider
+import pl.touk.nussknacker.engine.lite.components.requestresponse.RequestResponseComponentProvider
 import pl.touk.nussknacker.engine.lite.metrics.dropwizard.DropwizardMetricsProviderFactory
 import pl.touk.nussknacker.engine.requestresponse.FutureBasedRequestResponseScenarioInterpreter.InterpreterType
 import pl.touk.nussknacker.engine.resultcollector.ProductionServiceInvocationCollector
@@ -30,7 +31,6 @@ import java.util
 import scala.collection.immutable.ListMap
 import scala.concurrent.Future
 import scala.util.Using
-import scala.jdk.CollectionConverters._
 
 class RequestResponseInterpreterSpec extends AnyFunSuite with Matchers with PatientScalaFutures {
 
@@ -46,7 +46,7 @@ class RequestResponseInterpreterSpec extends AnyFunSuite with Matchers with Pati
       .processor("processor", "processorService")
       .emptySink("endNodeIID", "response-sink", "value" -> "#var1")
 
-    val creator   = new RequestResponseConfigCreator
+    val creator   = new RequestResponseSampleComponents
     val contextId = firstIdForFirstSource(process)
     val result    = runProcess(process, Request1("a", "b"), creator)
 
@@ -79,7 +79,7 @@ class RequestResponseInterpreterSpec extends AnyFunSuite with Matchers with Pati
       .processor("processor", "processorService")
       .emptySink("endNodeIID", "response-sink", "value" -> "#var1")
 
-    val creator        = new RequestResponseConfigCreator
+    val creator        = new RequestResponseSampleComponents
     val metricRegistry = new MetricRegistry
 
     Using.resource(prepareInterpreter(process, creator, metricRegistry)) { interpreter =>
@@ -146,7 +146,7 @@ class RequestResponseInterpreterSpec extends AnyFunSuite with Matchers with Pati
       .enricher("enricher2", "response2", "eagerEnricherWithOpen", "name" -> "'2'")
       .emptySink("sink1", "response-sink", "value" -> "#response1.field1 + #response2.field1")
 
-    val creator = new RequestResponseConfigCreator
+    val creator = new RequestResponseSampleComponents
     val result  = runProcess(process, Request1("a", "b"), creator)
 
     result shouldBe Valid(List("truetrue"))
@@ -170,7 +170,7 @@ class RequestResponseInterpreterSpec extends AnyFunSuite with Matchers with Pati
     val metricRegistry = new MetricRegistry
 
     Using.resource(
-      prepareInterpreter(process, new RequestResponseConfigCreator, metricRegistry = metricRegistry)
+      prepareInterpreter(process, new RequestResponseSampleComponents, metricRegistry = metricRegistry)
     ) { interpreter =>
       interpreter.open()
       val result = invokeInterpreter(interpreter, Request1("a", "b"))
@@ -257,7 +257,7 @@ class RequestResponseInterpreterSpec extends AnyFunSuite with Matchers with Pati
 
     val interpreter2 = prepareInterpreter(process = process2)
     interpreter2.sinkTypes shouldBe Map(
-      NodeId("endNodeIID") -> TypedObjectTypingResult(ListMap("str" -> Typed[String], "int" -> Typed.fromInstance(15)))
+      NodeId("endNodeIID") -> Typed.record(ListMap("str" -> Typed[String], "int" -> Typed.fromInstance(15)))
     )
 
   }
@@ -268,14 +268,14 @@ class RequestResponseInterpreterSpec extends AnyFunSuite with Matchers with Pati
       .source("start", "request1-post-source")
       .emptySink("sinkId", "failing-sink", "fail" -> "true")
 
-    val creator   = new RequestResponseConfigCreator
+    val creator   = new RequestResponseSampleComponents
     val contextId = firstIdForFirstSource(process)
     val result    = runProcess(process, Request1("a", "b"), creator, contextId = Some(contextId))
 
     result shouldBe Invalid(
       NonEmptyList.of(
         NuExceptionInfo(
-          Some(NodeComponentInfo("sinkId", "unknown", ComponentType.Sink)),
+          Some(NodeComponentInfo("sinkId", ComponentType.Sink, "unknown")),
           SinkException("FailingSink failed"),
           Context(contextId, Map("input" -> Request1("a", "b")), None)
         )
@@ -366,65 +366,17 @@ class RequestResponseInterpreterSpec extends AnyFunSuite with Matchers with Pati
     result shouldBe Valid(List(util.Arrays.asList("v5", "v4")))
   }
 
-  test("collect elements after for-each") {
-
-    val numberOfElements = 6
-
-    val scenario = ScenarioBuilder
-      .requestResponse("proc")
-      .source("start", "request-list-post-source")
-      .customNode("for-each", "outForEach", "for-each", "Elements" -> "#input.toList()")
-      .buildSimpleVariable("someVar", "ourVar", """ "x = " + (#outForEach * 2) """)
-      .customNode("collect", "outCollector", "collect", "Input expression" -> "#ourVar")
-      .emptySink("sink", "response-sink", "value" -> "#outCollector")
-
-    val resultE = runProcess(scenario, RequestNumber(numberOfElements))
-    resultE shouldBe Symbol("valid")
-    val result           = resultE.map(_.asInstanceOf[List[Any]]).getOrElse(throw new AssertionError())
-    val validElementList = (0 to numberOfElements).map(s => s"x = ${s * 2}").toSeq
-    result should have length 1
-
-    inside(result.head) { case resp: java.util.List[_] =>
-      resp.asScala should contain allElementsOf (validElementList)
-    }
-
-  }
-
-  test("collect elements after nested for-each") {
-
-    val numberOfElements = 3
-
-    val scenario = ScenarioBuilder
-      .requestResponse("proc")
-      .source("start", "request-list-post-source")
-      .customNode("for-each1", "outForEach1", "for-each", "Elements" -> "#input.toList()")
-      .customNode("for-each2", "outForEach2", "for-each", "Elements" -> "#input.toList()")
-      .buildSimpleVariable("someVar", "ourVar", """ "x = " + #outForEach2 """)
-      .customNode("collect", "outCollector", "collect", "Input expression" -> "#ourVar")
-      .emptySink("sink", "response-sink", "value" -> "#outCollector")
-
-    val resultE = runProcess(scenario, RequestNumber(numberOfElements))
-    resultE shouldBe Symbol("valid")
-    val result           = resultE.map(_.asInstanceOf[List[Any]]).getOrElse(throw new AssertionError())
-    val validElementList = (0 to numberOfElements).map(s => s"x = $s")
-    result should have length 1
-
-    inside(result.head) { case resp: java.util.List[_] =>
-      resp.asScala should contain allElementsOf (validElementList)
-    }
-  }
-
   def runProcess(
       process: CanonicalProcess,
       input: Any,
-      creator: RequestResponseConfigCreator = new RequestResponseConfigCreator,
+      creator: RequestResponseSampleComponents = new RequestResponseSampleComponents,
       metricRegistry: MetricRegistry = new MetricRegistry,
       contextId: Option[String] = None
   ): ValidatedNel[ErrorType, List[Any]] =
     Using.resource(
       prepareInterpreter(
         process = process,
-        creator = creator,
+        sampleComponents = creator,
         metricRegistry = metricRegistry
       )
     ) { interpreter =>
@@ -434,22 +386,27 @@ class RequestResponseInterpreterSpec extends AnyFunSuite with Matchers with Pati
 
   def prepareInterpreter(
       process: CanonicalProcess,
-      creator: RequestResponseConfigCreator,
+      sampleComponents: RequestResponseSampleComponents,
       metricRegistry: MetricRegistry
   ): InterpreterType = {
     prepareInterpreter(
       process,
-      creator,
+      sampleComponents,
       new LiteEngineRuntimeContextPreparer(new DropwizardMetricsProviderFactory(metricRegistry))
     )
   }
 
   def prepareInterpreter(
       process: CanonicalProcess,
-      creator: RequestResponseConfigCreator = new RequestResponseConfigCreator,
+      sampleComponents: RequestResponseSampleComponents = new RequestResponseSampleComponents,
       engineRuntimeContextPreparer: LiteEngineRuntimeContextPreparer = LiteEngineRuntimeContextPreparer.noOp
   ): InterpreterType = {
-    val simpleModelData = LocalModelData(ConfigFactory.load(), creator)
+    val simpleModelData =
+      LocalModelData(
+        ConfigFactory.load(),
+        sampleComponents.components :::
+          RequestResponseComponentProvider.Components ::: LiteBaseComponentProvider.Components
+      )
 
     import FutureBasedRequestResponseScenarioInterpreter._
     val maybeinterpreter = RequestResponseInterpreter[Future](

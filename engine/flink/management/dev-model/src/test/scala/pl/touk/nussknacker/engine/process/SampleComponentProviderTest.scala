@@ -3,24 +3,17 @@ package pl.touk.nussknacker.engine.process
 import com.typesafe.config.ConfigFactory
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
-import pl.touk.nussknacker.engine.api.ProcessVersion
+import pl.touk.nussknacker.engine.ModelData
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
-import pl.touk.nussknacker.engine.deployment.DeploymentData
 import pl.touk.nussknacker.engine.flink.test.FlinkSpec
-import pl.touk.nussknacker.engine.management.sample.DevProcessConfigCreator
-import pl.touk.nussknacker.engine.management.sample.modelconfig.SampleModelConfigLoader
-import pl.touk.nussknacker.engine.{ConfigWithUnresolvedVersion, process}
-import pl.touk.nussknacker.engine.process.compiler.FlinkProcessCompiler
-import pl.touk.nussknacker.engine.process.registrar.FlinkProcessRegistrar
+import pl.touk.nussknacker.engine.process.runner.UnitTestsFlinkRunner
 import pl.touk.nussknacker.engine.spel.Implicits._
-import pl.touk.nussknacker.engine.testing.LocalModelData
+import pl.touk.nussknacker.engine.util.loader.ModelClassLoader
 
 class SampleComponentProviderTest extends AnyFunSuite with FlinkSpec with Matchers {
 
   override protected lazy val config = ConfigFactory.empty()
-
-  private val configCreator: DevProcessConfigCreator = new DevProcessConfigCreator
 
   test("detects component service") {
     val process =
@@ -37,23 +30,12 @@ class SampleComponentProviderTest extends AnyFunSuite with FlinkSpec with Matche
     }
   }
 
-  private var registrar: FlinkProcessRegistrar = _
-
-  override protected def beforeAll(): Unit = {
-    super.beforeAll()
-    val loadedConfig = new SampleModelConfigLoader()
-      .resolveInputConfigDuringExecution(ConfigWithUnresolvedVersion(config), getClass.getClassLoader)
-    val modelData = LocalModelData(loadedConfig.config, configCreator)
-    registrar = process.registrar.FlinkProcessRegistrar(
-      new FlinkProcessCompiler(modelData),
-      ExecutionConfigPreparer.unOptimizedChain(modelData)
-    )
-  }
+  private val modelData = ModelData.duringExecution(config, ModelClassLoader.empty, resolveConfigs = true)
 
   private def run(process: CanonicalProcess)(action: => Unit): Unit = {
     val env = flinkMiniCluster.createExecutionEnvironment()
-    registrar.register(env, process, ProcessVersion.empty, DeploymentData.empty)
-    env.withJobRunning(process.id)(action)
+    UnitTestsFlinkRunner.registerInEnvironmentWithModel(env, modelData)(process)
+    env.withJobRunning(process.name.value)(action)
   }
 
 }

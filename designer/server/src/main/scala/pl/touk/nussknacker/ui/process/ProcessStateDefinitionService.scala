@@ -1,37 +1,31 @@
 package pl.touk.nussknacker.ui.process
 
-import cats.data.Validated
+import cats.data.{NonEmptyList, Validated}
 import io.circe.generic.JsonCodec
-import pl.touk.nussknacker.engine.ProcessingTypeData
 import pl.touk.nussknacker.engine.api.deployment.StateDefinitionDetails
 import pl.touk.nussknacker.engine.api.deployment.StateStatus.StatusName
 import pl.touk.nussknacker.engine.api.process.ProcessingType
-import pl.touk.nussknacker.ui.process.ProcessStateDefinitionService.StatusNameToStateDefinitionsMapping
-import pl.touk.nussknacker.ui.process.processingtypedata.ProcessingTypeDataProvider
+import pl.touk.nussknacker.engine.util.Implicits.RichTupleList
+import pl.touk.nussknacker.ui.process.ProcessStateDefinitionService.StateDefinitionDeduplicationResult
+import pl.touk.nussknacker.ui.process.processingtype.{ProcessingTypeData, ProcessingTypeDataProvider}
 import pl.touk.nussknacker.ui.security.api.LoggedUser
 
 import java.net.URI
 
 class ProcessStateDefinitionService(
     processingTypeDataProvider: ProcessingTypeDataProvider[
-      _,
-      (StatusNameToStateDefinitionsMapping, ProcessCategoryService)
+      String,
+      Map[StatusName, StateDefinitionDeduplicationResult]
     ],
 ) {
 
   def fetchStateDefinitions(implicit user: LoggedUser): List[UIStateDefinition] = {
-    val (stateDefinitionsMapping, categoryService) = processingTypeDataProvider.combined
-    val userCategoryService                        = new UserCategoryService(categoryService)
-    val userAccessibleCategories                   = userCategoryService.getUserCategories(user)
-    stateDefinitionsMapping
-      .map { case (statusName, (stateDefinition, processingTypes)) =>
-        val categoriesWhereStateAppears = processingTypes.flatMap { processingType =>
-          List(
-            categoryService
-              .getProcessingTypeCategoryUnsafe(processingType)
-          )
-            .intersect(userAccessibleCategories)
-        }
+    val processingTypeToCategoryMap = processingTypeDataProvider.all
+    val stateDefinitionsMapping     = processingTypeDataProvider.combined
+    stateDefinitionsMapping.toList
+      .map { case (statusName, StateDefinitionDeduplicationResult(stateDefinition, processingTypes)) =>
+        // processingTypeDataProvider already check read permission
+        val userCategoriesWhereStateAppears = processingTypes.flatMap(processingTypeToCategoryMap.get)
         // TODO: Here we switch icon to non-animated version, in rather not sophisticated manner. We should be able to handle
         //  both animated (in scenario list, scenario details) and non-animated (filter options) versions.
         UIStateDefinition(
@@ -39,39 +33,43 @@ class ProcessStateDefinitionService(
           stateDefinition.displayableName,
           URI.create(stateDefinition.icon.toString.replace("-animated", "")),
           stateDefinition.tooltip,
-          categoriesWhereStateAppears
+          userCategoriesWhereStateAppears.toList
         )
       }
       .filter(_.categories.nonEmpty)
-      .toList
   }
 
 }
 
 object ProcessStateDefinitionService {
 
-  type StatusNameToStateDefinitionsMapping = Map[StatusName, (StateDefinitionDetails, List[ProcessingType])]
+  final case class StateDefinitionDeduplicationResult(
+      definition: StateDefinitionDetails,
+      processingTypes: Set[ProcessingType]
+  )
 
   /**
     * Each processing type define its own state definitions. Technically it is possible that two processing types provide
-    * states with the same StatusName and different UI configurations (displayable name and icon). Here is an assertion
+    * states with the same StatusName and different UI configurations (name and icon). Here is an assertion
     * that this does not happen and each state has the same definition across all processingTypes.
     */
   def createDefinitionsMappingUnsafe(
       processingTypes: Map[ProcessingType, ProcessingTypeData]
-  ): StatusNameToStateDefinitionsMapping = {
+  ): Map[StatusName, StateDefinitionDeduplicationResult] = {
     import cats.instances.list._
     import cats.syntax.alternative._
 
     val (namesWithNonUniqueDefinitions, validDefinitions) = processingTypeStateDefinitions(processingTypes)
-      .groupBy { case (_, statusName, _) => statusName }
-      .map { case (statusName, stateDefinitionsForOneStatusName) =>
-        validateStateDefinitions(stateDefinitionsForOneStatusName)
-          .map(_ =>
-            statusName -> (stateDefinitionsForOneStatusName.head._3, stateDefinitionsForOneStatusName.map(_._1))
-          )
+      .map { case (processingType, statusName, stateDefinitionDetails) =>
+        statusName -> (processingType, stateDefinitionDetails)
       }
+      .toGroupedMapSafe
       .toList
+      .map { case (statusName, stateDefinitionsForOneStatusName) =>
+        deduplicateStateDefinitions(stateDefinitionsForOneStatusName)
+          .map(statusName -> _)
+          .leftMap(_ => statusName)
+      }
       .separate
     if (namesWithNonUniqueDefinitions.nonEmpty) {
       throw new IllegalStateException(
@@ -85,17 +83,23 @@ object ProcessStateDefinitionService {
       processingTypes: Map[ProcessingType, ProcessingTypeData]
   ): List[(ProcessingType, StatusName, StateDefinitionDetails)] = {
     processingTypes.toList.flatMap { case (processingType, processingTypeData) =>
-      processingTypeData.deploymentManager.processStateDefinitionManager.stateDefinitions
+      processingTypeData.deploymentData.validDeploymentManagerOrStub.processStateDefinitionManager.stateDefinitions
         .map { case (name, sd) => (processingType, name, sd) }
     }
   }
 
-  private def validateStateDefinitions(
-      stateDefinitionsForOneStatusName: List[(ProcessingType, StatusName, StateDefinitionDetails)]
-  ): Validated[StatusName, Unit] = {
-    val uniqueDefinitionsForName = stateDefinitionsForOneStatusName
-      .groupBy { case (_, _, sd) => (sd.displayableName, sd.icon) }
-    Validated.cond(uniqueDefinitionsForName.size == 1, (), stateDefinitionsForOneStatusName.head._2)
+  private def deduplicateStateDefinitions(
+      stateDefinitionsForOneStatusName: NonEmptyList[(ProcessingType, StateDefinitionDetails)]
+  ): Validated[Unit, StateDefinitionDeduplicationResult] = {
+    val uniqueDefinitionsForName = stateDefinitionsForOneStatusName.toList
+      // TODO: For some reasons we don't check other properties (tooltip and description). This code would be
+      //       a little bit easier if we do - figure out why and write a comment
+      .groupBy { case (_, sd) => (sd.displayableName, sd.icon) }
+    lazy val deduplicatedResult = StateDefinitionDeduplicationResult(
+      stateDefinitionsForOneStatusName.head._2,
+      stateDefinitionsForOneStatusName.map(_._1).toList.toSet
+    )
+    Validated.cond(uniqueDefinitionsForName.size == 1, deduplicatedResult, ())
   }
 
 }

@@ -7,28 +7,29 @@ import akka.http.scaladsl.unmarshalling.{FromEntityUnmarshaller, Unmarshaller}
 import cats.instances.all._
 import de.heikoseeberger.akkahttpcirce.FailFastCirceSupport
 import io.circe.Json
-import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, OptionValues}
+import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.BeMatcher
-import pl.touk.nussknacker.engine.api.{MetaData, StreamMetaData}
-import pl.touk.nussknacker.engine.api.deployment.{ProcessAction, ProcessActionType}
+import org.scalatest.matchers.should.Matchers
+import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, OptionValues}
+import pl.touk.nussknacker.engine.api.deployment.ProcessActionType.ProcessActionType
 import pl.touk.nussknacker.engine.api.deployment.simple.SimpleStateStatus
-import pl.touk.nussknacker.engine.api.process.{ProcessIdWithName, ProcessName, VersionId}
+import pl.touk.nussknacker.engine.api.deployment.{ProcessAction, ProcessActionType, ScenarioActionName}
+import pl.touk.nussknacker.engine.api.process.{ProcessName, VersionId}
+import pl.touk.nussknacker.engine.api.{MetaData, StreamMetaData}
 import pl.touk.nussknacker.engine.build.ScenarioBuilder
+import pl.touk.nussknacker.engine.kafka.KafkaFactory
 import pl.touk.nussknacker.engine.spel.Implicits._
 import pl.touk.nussknacker.restmodel.scenariodetails._
 import pl.touk.nussknacker.restmodel.{CustomActionRequest, CustomActionResponse}
+import pl.touk.nussknacker.security.Permission
 import pl.touk.nussknacker.test.PatientScalaFutures
-import pl.touk.nussknacker.ui.api.helpers.TestFactory._
-import pl.touk.nussknacker.ui.api.helpers._
+import pl.touk.nussknacker.test.utils.domain.TestFactory.{withAllPermissions, withPermissions}
+import pl.touk.nussknacker.test.base.it.NuResourcesTest
+import pl.touk.nussknacker.test.mock.MockDeploymentManager
+import pl.touk.nussknacker.test.utils.domain.{ProcessTestData, TestFactory}
+import pl.touk.nussknacker.ui.process.ScenarioQuery
 import pl.touk.nussknacker.ui.process.exception.ProcessIllegalAction
 import pl.touk.nussknacker.ui.process.repository.DbProcessActivityRepository.ProcessActivity
-import org.scalatest.funsuite.AnyFunSuite
-import org.scalatest.matchers.should.Matchers
-import pl.touk.nussknacker.engine.api.deployment.ProcessActionType.ProcessActionType
-import pl.touk.nussknacker.engine.kafka.KafkaFactory
-import pl.touk.nussknacker.ui.process.ScenarioQuery
-
-import java.time.Instant
 
 class ManagementResourcesSpec
     extends AnyFunSuite
@@ -41,13 +42,12 @@ class ManagementResourcesSpec
     with BeforeAndAfterAll
     with NuResourcesTest {
 
-  import TestCategories._
   import KafkaFactory._
 
   private implicit final val string: FromEntityUnmarshaller[String] =
     Unmarshaller.stringUnmarshaller.forContentTypes(ContentTypeRange.*)
 
-  private val processName: ProcessName = ProcessName(SampleProcess.process.id)
+  private val processName: ProcessName = ProcessTestData.sampleScenario.name
 
   private def deployedWithVersions(versionId: Long): BeMatcher[Option[ProcessAction]] = {
     BeMatcher[(ProcessActionType, VersionId)](equal((ProcessActionType.Deploy, VersionId(versionId))))
@@ -56,13 +56,13 @@ class ManagementResourcesSpec
   }
 
   test("process deployment should be visible in process history") {
-    saveProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
-    deployProcess(SampleProcess.process.id) ~> checkThatEventually {
+    saveCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
+    deployProcess(processName) ~> checkThatEventually {
       status shouldBe StatusCodes.OK
       getProcess(processName) ~> check {
         decodeDetails.lastStateAction shouldBe deployedWithVersions(2)
-        updateProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
-        deployProcess(SampleProcess.process.id) ~> checkThatEventually {
+        updateCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
+        deployProcess(processName) ~> checkThatEventually {
           getProcess(processName) ~> check {
             decodeDetails.lastStateAction shouldBe deployedWithVersions(2)
           }
@@ -72,61 +72,64 @@ class ManagementResourcesSpec
   }
 
   test("process during deploy cannot be deployed again") {
-    createDeployedProcess(processName, Category1)
+    createDeployedExampleScenario(processName)
 
     deploymentManager.withProcessStateStatus(processName, SimpleStateStatus.DuringDeploy) {
-      deployProcess(processName.value) ~> check {
+      deployProcess(processName) ~> check {
         status shouldBe StatusCodes.Conflict
       }
     }
   }
 
   test("canceled process can't be canceled again") {
-    createDeployedCanceledProcess(processName, Category1)
+    createDeployedCanceledExampleScenario(processName)
 
     deploymentManager.withProcessStateStatus(processName, SimpleStateStatus.Canceled) {
-      cancelProcess(processName.value) ~> check {
+      cancelProcess(processName) ~> check {
         status shouldBe StatusCodes.Conflict
       }
     }
   }
 
   test("can't deploy archived process") {
-    val id                = createArchivedProcess(processName)
-    val processIdWithName = ProcessIdWithName(id, processName)
+    createArchivedProcess(processName)
 
     deploymentManager.withProcessStateStatus(processName, SimpleStateStatus.Canceled) {
-      deployProcess(processName.value) ~> check {
+      deployProcess(processName) ~> check {
         status shouldBe StatusCodes.Conflict
-        responseAs[String] shouldBe ProcessIllegalAction.archived(ProcessActionType.Deploy, processIdWithName).message
+        responseAs[String] shouldBe ProcessIllegalAction
+          .archived(ScenarioActionName(ProcessActionType.Deploy), processName)
+          .message
       }
     }
   }
 
   test("can't deploy fragment") {
-    val id                = createValidProcess(processName, Category1, isFragment = true)
-    val processIdWithName = ProcessIdWithName(id, processName)
+    createValidProcess(processName, isFragment = true)
 
-    deployProcess(processName.value) ~> check {
+    deployProcess(processName) ~> check {
       status shouldBe StatusCodes.Conflict
-      responseAs[String] shouldBe ProcessIllegalAction.fragment(ProcessActionType.Deploy, processIdWithName).message
+      responseAs[String] shouldBe ProcessIllegalAction
+        .fragment(ScenarioActionName(ProcessActionType.Deploy), processName)
+        .message
     }
   }
 
   test("can't cancel fragment") {
-    val id                = createValidProcess(processName, Category1, isFragment = true)
-    val processIdWithName = ProcessIdWithName(id, processName)
+    createValidProcess(processName, isFragment = true)
 
-    deployProcess(processName.value) ~> check {
+    deployProcess(processName) ~> check {
       status shouldBe StatusCodes.Conflict
-      responseAs[String] shouldBe ProcessIllegalAction.fragment(ProcessActionType.Deploy, processIdWithName).message
+      responseAs[String] shouldBe ProcessIllegalAction
+        .fragment(ScenarioActionName(ProcessActionType.Deploy), processName)
+        .message
     }
   }
 
   test("deploys and cancels with comment") {
-    saveProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
+    saveCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
     deployProcess(
-      SampleProcess.process.id,
+      ProcessTestData.sampleScenario.name,
       Some(DeploymentCommentSettings.unsafe("deploy.*", Some("deployComment"))),
       comment = Some("deployComment")
     ) ~> checkThatEventually {
@@ -135,7 +138,7 @@ class ManagementResourcesSpec
         processDetails.lastStateAction.exists(_.actionType.equals(ProcessActionType.Deploy)) shouldBe true
       }
       cancelProcess(
-        SampleProcess.process.id,
+        ProcessTestData.sampleScenario.name,
         Some(DeploymentCommentSettings.unsafe("cancel.*", Some("cancelComment"))),
         comment = Some("cancelComment")
       ) ~> check {
@@ -143,21 +146,22 @@ class ManagementResourcesSpec
         // TODO: remove Deployment:, Stop: after adding custom icons
         val expectedDeployComment = "Deployment: deployComment"
         val expectedStopComment   = "Stop: cancelComment"
-        getActivity(ProcessName(SampleProcess.process.id)) ~> check {
+        getActivity(ProcessTestData.sampleScenario.name) ~> check {
           val comments = responseAs[ProcessActivity].comments.sortBy(_.id)
           comments.map(_.content) shouldBe List(expectedDeployComment, expectedStopComment)
 
           val firstCommentId :: secondCommentId :: Nil = comments.map(_.id)
 
-          Get(s"/processes/${SampleProcess.process.id}/deployments") ~> withAllPermissions(processesRoute) ~> check {
+          Get(s"/processes/${ProcessTestData.sampleScenario.name}/deployments") ~> withAllPermissions(
+            processesRoute
+          ) ~> check {
             val deploymentHistory = responseAs[List[ProcessAction]]
-            val curTime           = Instant.now()
             deploymentHistory.map(a =>
               (a.processVersionId, a.user, a.actionType, a.commentId, a.comment, a.buildInfo)
             ) shouldBe List(
               (
                 VersionId(2),
-                user().username,
+                TestFactory.user().username,
                 ProcessActionType.Cancel,
                 Some(secondCommentId),
                 Some(expectedStopComment),
@@ -165,7 +169,7 @@ class ManagementResourcesSpec
               ),
               (
                 VersionId(2),
-                user().username,
+                TestFactory.user().username,
                 ProcessActionType.Deploy,
                 Some(firstCommentId),
                 Some(expectedDeployComment),
@@ -179,9 +183,9 @@ class ManagementResourcesSpec
   }
 
   test("rejects deploy without comment if comment required") {
-    saveProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
+    saveCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
     deployProcess(
-      SampleProcess.process.id,
+      ProcessTestData.sampleScenario.name,
       deploymentCommentSettings =
         Some(DeploymentCommentSettings.unsafe("requiredCommentPattern", Some("exampleRequiredComment")))
     ) ~> check {
@@ -190,9 +194,9 @@ class ManagementResourcesSpec
   }
 
   test("deploy technical process and mark it as deployed") {
-    createValidProcess(processName, Category1, false)
+    createValidProcess(processName)
 
-    deployProcess(processName.value) ~> checkThatEventually {
+    deployProcess(processName) ~> checkThatEventually {
       status shouldBe StatusCodes.OK
       getProcess(processName) ~> check {
         val processDetails = responseAs[ScenarioWithDetails]
@@ -203,12 +207,12 @@ class ManagementResourcesSpec
   }
 
   test("recognize process cancel in deployment list") {
-    saveProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
-    deployProcess(SampleProcess.process.id) ~> checkThatEventually {
+    saveCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
+    deployProcess(ProcessTestData.sampleScenario.name) ~> checkThatEventually {
       status shouldBe StatusCodes.OK
       getProcess(processName) ~> check {
         decodeDetails.lastStateAction shouldBe deployedWithVersions(2)
-        cancelProcess(SampleProcess.process.id) ~> check {
+        cancelProcess(ProcessTestData.sampleScenario.name) ~> check {
           getProcess(processName) ~> check {
             decodeDetails.lastStateAction.exists(_.actionType.equals(ProcessActionType.Cancel)) shouldBe true
           }
@@ -218,18 +222,18 @@ class ManagementResourcesSpec
   }
 
   test("recognize process deploy and cancel in global process list") {
-    saveProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
-    deployProcess(SampleProcess.process.id) ~> checkThatEventually {
+    saveCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
+    deployProcess(ProcessTestData.sampleScenario.name) ~> checkThatEventually {
       status shouldBe StatusCodes.OK
 
       forScenariosReturned(ScenarioQuery.empty) { processes =>
-        val process = processes.find(_.name == SampleProcess.process.id).head
+        val process = processes.find(_.name == ProcessTestData.sampleScenario.name.value).head
         process.lastActionVersionId shouldBe Some(2L)
         process.isDeployed shouldBe true
 
-        cancelProcess(SampleProcess.process.id) ~> check {
+        cancelProcess(ProcessTestData.sampleScenario.name) ~> check {
           forScenariosReturned(ScenarioQuery.empty) { processes =>
-            val process = processes.find(_.name == SampleProcess.process.id).head
+            val process = processes.find(_.name == ProcessTestData.sampleScenario.name.value).head
             process.lastActionVersionId shouldBe Some(2L)
             process.isCanceled shouldBe true
           }
@@ -239,10 +243,10 @@ class ManagementResourcesSpec
   }
 
   test("not authorize user with write permission to deploy") {
-    saveProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
-    Post(s"/processManagement/deploy/${SampleProcess.process.id}") ~> withPermissions(
+    saveCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
+    Post(s"/processManagement/deploy/${ProcessTestData.sampleScenario.name}") ~> withPermissions(
       deployRoute(),
-      testPermissionWrite
+      Permission.Write
     ) ~> check {
       rejection shouldBe server.AuthorizationFailedRejection
     }
@@ -250,45 +254,48 @@ class ManagementResourcesSpec
 
   test("should allow deployment of scenario with warning") {
     val processWithDisabledFilter = ScenarioBuilder
-      .streaming("sampleProcess")
+      .streaming(processName.value)
       .parallelism(1)
       .source("startProcess", "csv-source")
       .filter("input", "#input != null", Some(true))
       .emptySink("end", "kafka-string", TopicParamName -> "'end.topic'", SinkValueParamName -> "#input")
 
-    saveProcessAndAssertSuccess(SampleProcess.process.id, processWithDisabledFilter)
-    deployProcess(processName.value) ~> check {
+    saveCanonicalProcessAndAssertSuccess(processWithDisabledFilter)
+    deployProcess(processName) ~> check {
       status shouldBe StatusCodes.OK
     }
   }
 
   test("should return failure for not validating scenario") {
     val invalidScenario = ScenarioBuilder
-      .streaming("sampleProcess")
+      .streaming(processName.value)
       .parallelism(1)
       .source("start", "not existing")
       .emptySink("end", "kafka-string", TopicParamName -> "'end.topic'", SinkValueParamName -> "#output")
-    saveProcessAndAssertSuccess(invalidScenario.id, invalidScenario)
+    saveCanonicalProcessAndAssertSuccess(invalidScenario)
 
-    deploymentManager.withEmptyProcessState(ProcessName(invalidScenario.id)) {
-      deployProcess(invalidScenario.id) ~> check {
+    deploymentManager.withEmptyProcessState(invalidScenario.name) {
+      deployProcess(invalidScenario.name) ~> check {
         responseAs[String] shouldBe "Cannot deploy invalid scenario"
         status shouldBe StatusCodes.Conflict
       }
-      getProcess(ProcessName(invalidScenario.id)) ~> check {
+      getProcess(invalidScenario.name) ~> check {
         decodeDetails.state.value.status shouldEqual SimpleStateStatus.NotDeployed
       }
     }
   }
 
   test("should return failure for not validating deployment") {
-    val largeParallelismScenario = SampleProcess.process.copy(metaData =
-      MetaData(SampleProcess.process.id, StreamMetaData(parallelism = Some(MockDeploymentManager.maxParallelism + 1)))
+    val largeParallelismScenario = ProcessTestData.sampleScenario.copy(metaData =
+      MetaData(
+        ProcessTestData.sampleScenario.name.value,
+        StreamMetaData(parallelism = Some(MockDeploymentManager.maxParallelism + 1))
+      )
     )
-    saveProcessAndAssertSuccess(largeParallelismScenario.id, largeParallelismScenario)
+    saveCanonicalProcessAndAssertSuccess(largeParallelismScenario)
 
-    deploymentManager.withFailingDeployment(ProcessName(largeParallelismScenario.id)) {
-      deployProcess(largeParallelismScenario.id) ~> check {
+    deploymentManager.withFailingDeployment(largeParallelismScenario.name) {
+      deployProcess(largeParallelismScenario.name) ~> check {
         status shouldBe StatusCodes.BadRequest
         responseAs[String] shouldBe "Parallelism too large"
       }
@@ -296,19 +303,19 @@ class ManagementResourcesSpec
   }
 
   test("return from deploy before deployment manager proceeds") {
-    saveProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
+    saveCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
 
-    deploymentManager.withWaitForDeployFinish(ProcessName(SampleProcess.process.id)) {
-      deployProcess(SampleProcess.process.id) ~> check {
+    deploymentManager.withWaitForDeployFinish(ProcessTestData.sampleScenario.name) {
+      deployProcess(ProcessTestData.sampleScenario.name) ~> check {
         status shouldBe StatusCodes.OK
       }
     }
   }
 
   test("snapshots process") {
-    saveProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
-    deploymentManager.withProcessRunning(ProcessName(SampleProcess.process.id)) {
-      snapshot(SampleProcess.process.id) ~> check {
+    saveCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
+    deploymentManager.withProcessRunning(ProcessTestData.sampleScenario.name) {
+      snapshot(ProcessTestData.sampleScenario.name) ~> check {
         status shouldBe StatusCodes.OK
         responseAs[String] shouldBe MockDeploymentManager.savepointPath
       }
@@ -316,9 +323,9 @@ class ManagementResourcesSpec
   }
 
   test("stops process") {
-    saveProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
-    deploymentManager.withProcessRunning(ProcessName(SampleProcess.process.id)) {
-      stop(SampleProcess.process.id) ~> check {
+    saveCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
+    deploymentManager.withProcessRunning(ProcessTestData.sampleScenario.name) {
+      stop(ProcessTestData.sampleScenario.name) ~> check {
         status shouldBe StatusCodes.OK
         responseAs[String] shouldBe MockDeploymentManager.stopSavepointPath
       }
@@ -329,9 +336,9 @@ class ManagementResourcesSpec
     val testDataContent =
       """{"sourceId":"startProcess","record":"ala"}
         |{"sourceId":"startProcess","record":"bela"}""".stripMargin
-    saveProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
+    saveCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
 
-    testScenario(SampleProcess.process, testDataContent) ~> check {
+    testScenario(ProcessTestData.sampleScenario, testDataContent) ~> check {
 
       status shouldEqual StatusCodes.OK
 
@@ -340,7 +347,6 @@ class ManagementResourcesSpec
         .downField("nodeResults")
         .downField("endsuffix")
         .downArray
-        .downField("context")
         .downField("variables")
 
       ctx
@@ -362,7 +368,7 @@ class ManagementResourcesSpec
     import pl.touk.nussknacker.engine.spel.Implicits._
 
     val process = ScenarioBuilder
-      .streaming("sampleProcess")
+      .streaming(processName.value)
       .parallelism(1)
       .source("startProcess", "csv-source")
       .filter("input", "new java.math.BigDecimal(null) == 0")
@@ -370,7 +376,7 @@ class ManagementResourcesSpec
     val testDataContent =
       """{"sourceId":"startProcess","record":"ala"}
         |"bela"""".stripMargin
-    saveProcessAndAssertSuccess(process.id, process)
+    saveCanonicalProcessAndAssertSuccess(process)
 
     testScenario(process, testDataContent) ~> check {
       status shouldEqual StatusCodes.OK
@@ -383,12 +389,12 @@ class ManagementResourcesSpec
 
     val process = {
       ScenarioBuilder
-        .streaming("sampleProcess")
+        .streaming(processName.value)
         .parallelism(1)
         .source("startProcess", "csv-source")
         .emptySink("end", "kafka-string", TopicParamName -> "'end.topic'")
     }
-    saveProcessAndAssertSuccess(process.id, process)
+    saveCanonicalProcessAndAssertSuccess(process)
     val tooLargeTestDataContentList = List((1 to 50).mkString("\n"), (1 to 50000).mkString("-"))
 
     tooLargeTestDataContentList.foreach { tooLargeData =>
@@ -399,69 +405,81 @@ class ManagementResourcesSpec
   }
 
   test("rejects test record with non-existing source") {
-    saveProcessAndAssertSuccess(SampleProcess.process.id, SampleProcess.process)
+    saveCanonicalProcessAndAssertSuccess(ProcessTestData.sampleScenario)
     val testDataContent =
       """{"sourceId":"startProcess","record":"ala"}
         |{"sourceId":"unknown","record":"bela"}""".stripMargin
 
-    testScenario(SampleProcess.process, testDataContent) ~> check {
+    testScenario(ProcessTestData.sampleScenario, testDataContent) ~> check {
       status shouldEqual StatusCodes.BadRequest
       responseAs[String] shouldBe "Record 2 - scenario does not have source id: 'unknown'"
     }
   }
 
   test("execute valid custom action") {
-    createEmptyProcess(SampleProcess.processName)
-    customAction(SampleProcess.processName, CustomActionRequest("hello")) ~> check {
+    createEmptyProcess(ProcessTestData.sampleProcessName)
+    customAction(
+      ProcessTestData.sampleProcessName,
+      CustomActionRequest(ScenarioActionName("hello"))
+    ) ~> check {
       status shouldBe StatusCodes.OK
       responseAs[CustomActionResponse] shouldBe CustomActionResponse(isSuccess = true, msg = "Hi")
     }
   }
 
   test("execute non existing custom action") {
-    createEmptyProcess(SampleProcess.processName)
-    customAction(SampleProcess.processName, CustomActionRequest("non-existing")) ~> check {
+    createEmptyProcess(ProcessTestData.sampleProcessName)
+    customAction(
+      ProcessTestData.sampleProcessName,
+      CustomActionRequest(ScenarioActionName("non-existing"))
+    ) ~> check {
       status shouldBe StatusCodes.NotFound
-      responseAs[CustomActionResponse] shouldBe CustomActionResponse(
-        isSuccess = false,
-        msg = "non-existing is not existing"
-      )
+      responseAs[String] shouldBe "non-existing is not existing"
     }
   }
 
   test("execute not implemented custom action") {
-    createEmptyProcess(SampleProcess.processName)
-    customAction(SampleProcess.processName, CustomActionRequest("not-implemented")) ~> check {
+    createEmptyProcess(ProcessTestData.sampleProcessName)
+    customAction(
+      ProcessTestData.sampleProcessName,
+      CustomActionRequest(ScenarioActionName("not-implemented"))
+    ) ~> check {
       status shouldBe StatusCodes.NotImplemented
-      responseAs[CustomActionResponse] shouldBe CustomActionResponse(
-        isSuccess = false,
-        msg = "not-implemented is not implemented"
-      )
+      responseAs[String] shouldBe "an implementation is missing"
     }
   }
 
   test("execute custom action with not allowed process status") {
-    createEmptyProcess(SampleProcess.processName)
-    customAction(SampleProcess.processName, CustomActionRequest("invalid-status")) ~> check {
-      status shouldBe StatusCodes.Forbidden
-      responseAs[CustomActionResponse] shouldBe CustomActionResponse(
-        isSuccess = false,
-        msg = s"Scenario status: NOT_DEPLOYED is not allowed for action invalid-status"
-      )
+    createEmptyProcess(ProcessTestData.sampleProcessName)
+    customAction(
+      ProcessTestData.sampleProcessName,
+      CustomActionRequest(ScenarioActionName("invalid-status"))
+    ) ~> check {
+      // TODO: "conflict" is coherrent with "canceled process can't be canceled again" above, consider changing to Forbidden
+      status shouldBe StatusCodes.Conflict
+      responseAs[String] shouldBe "Action: invalid-status is not allowed in scenario (fooProcess) state: NOT_DEPLOYED, allowed actions: hello,not-implemented."
     }
   }
 
   test("should return 403 when execute custom action on archived process") {
-    createArchivedProcess(SampleProcess.processName)
-    customAction(SampleProcess.processName, CustomActionRequest("hello")) ~> check {
-      status shouldBe StatusCodes.Forbidden
+    createArchivedProcess(ProcessTestData.sampleProcessName)
+    customAction(
+      ProcessTestData.sampleProcessName,
+      CustomActionRequest(ScenarioActionName("hello"))
+    ) ~> check {
+      // TODO: "conflict" is coherrent with "can't deploy fragment" above, consider changing to Forbidden
+      status shouldBe StatusCodes.Conflict
     }
   }
 
   test("should return 403 when execute custom action on fragment") {
-    createEmptyProcess(SampleProcess.processName, isFragment = true)
-    customAction(SampleProcess.processName, CustomActionRequest("hello")) ~> check {
-      status shouldBe StatusCodes.Forbidden
+    createEmptyProcess(ProcessTestData.sampleProcessName, isFragment = true)
+    customAction(
+      ProcessTestData.sampleProcessName,
+      CustomActionRequest(ScenarioActionName("hello"))
+    ) ~> check {
+      // TODO: "conflict" is coherrent with "can't deploy fragment" above, consider changing to Forbidden
+      status shouldBe StatusCodes.Conflict
     }
   }
 

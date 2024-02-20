@@ -3,9 +3,10 @@ package pl.touk.nussknacker.restmodel
 import io.circe.generic.JsonCodec
 import io.circe.generic.extras.ConfiguredJsonCodec
 import pl.touk.nussknacker.engine.api.component.ComponentType.ComponentType
-import pl.touk.nussknacker.engine.api.component.{ComponentGroupName, ComponentId}
+import pl.touk.nussknacker.engine.api.component.{ComponentGroupName, ComponentId, DesignerWideComponentId}
 import pl.touk.nussknacker.engine.api.deployment.ProcessAction
 import pl.touk.nussknacker.engine.api.process.{ProcessId, ProcessName}
+import sttp.tapir.Schema
 
 import java.net.URI
 import java.time.Instant
@@ -46,7 +47,7 @@ package object component {
 
   @JsonCodec
   final case class ComponentListElement(
-      id: ComponentId,
+      id: DesignerWideComponentId,
       name: String,
       icon: String,
       componentType: ComponentType,
@@ -54,13 +55,13 @@ package object component {
       categories: List[String],
       links: List[ComponentLink],
       usageCount: Long
-  )
+  ) {
+    def componentId: ComponentId = ComponentId(componentType, name)
+  }
 
   @JsonCodec
   final case class ComponentUsagesInScenario(
-      id: String,
       name: ProcessName,
-      processId: ProcessId,
       nodesUsagesData: List[NodeUsageData],
       isFragment: Boolean,
       processCategory: String,
@@ -72,4 +73,5 @@ package object component {
       lastAction: Option[ProcessAction]
   )
 
+  implicit val uriSchema: Schema[URI] = Schema.string
 }

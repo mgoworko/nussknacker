@@ -1,7 +1,6 @@
 import { NodeType, NodeValidationError, ProcessDefinitionData, UIParameter } from "../../../types";
 import ProcessUtils from "../../../common/ProcessUtils";
 import React, { useCallback } from "react";
-import { NodeTableBody } from "./NodeDetailsContent/NodeTable";
 import { IdField } from "./IdField";
 import { DisableField } from "./DisableField";
 import { ParameterExpressionField } from "./ParameterExpressionField";
@@ -10,7 +9,7 @@ import OutputParametersList from "./OutputParametersList";
 import { useParametersList } from "./useParametersList";
 
 interface FragmentInput {
-    fieldErrors?: NodeValidationError[];
+    errors: NodeValidationError[];
     findAvailableVariables?: ReturnType<typeof ProcessUtils.findAvailableVariables>;
     isEditMode?: boolean;
     node: NodeType;
@@ -24,7 +23,7 @@ interface FragmentInput {
 
 export function FragmentInput(props: FragmentInput): JSX.Element {
     const {
-        fieldErrors,
+        errors,
         findAvailableVariables,
         isEditMode,
         node,
@@ -39,14 +38,14 @@ export function FragmentInput(props: FragmentInput): JSX.Element {
     const parameters = useParametersList(node, processDefinitionData, isEditMode, setNodeState);
 
     return (
-        <NodeTableBody>
+        <>
             <IdField
                 node={node}
                 isEditMode={isEditMode}
                 showValidation={showValidation}
                 renderFieldLabel={renderFieldLabel}
                 setProperty={setProperty}
-                errors={fieldErrors}
+                errors={errors}
             />
             <DisableField
                 node={node}
@@ -54,6 +53,7 @@ export function FragmentInput(props: FragmentInput): JSX.Element {
                 showValidation={showValidation}
                 renderFieldLabel={renderFieldLabel}
                 setProperty={setProperty}
+                errors={errors}
             />
             {parameters.map((param, index) => (
                 <ParameterExpressionField
@@ -61,7 +61,7 @@ export function FragmentInput(props: FragmentInput): JSX.Element {
                     showSwitch={showSwitch}
                     findAvailableVariables={findAvailableVariables}
                     parameterDefinitions={parameterDefinitions}
-                    fieldErrors={fieldErrors}
+                    errors={errors}
                     node={node}
                     isEditMode={isEditMode}
                     showValidation={showValidation}
@@ -73,7 +73,7 @@ export function FragmentInput(props: FragmentInput): JSX.Element {
             ))}
             <OutputParametersList
                 editedNode={node}
-                fieldErrors={fieldErrors}
+                errors={errors}
                 isEditMode={isEditMode}
                 showValidation={showValidation}
                 renderFieldLabel={renderFieldLabel}
@@ -86,7 +86,8 @@ export function FragmentInput(props: FragmentInput): JSX.Element {
                 showValidation={showValidation}
                 renderFieldLabel={renderFieldLabel}
                 setProperty={setProperty}
+                errors={errors}
             />
-        </NodeTableBody>
+        </>
     );
 }

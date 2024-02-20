@@ -8,16 +8,15 @@ import cats.syntax.traverse._
 import de.heikoseeberger.akkahttpcirce.FailFastCirceSupport
 import io.circe.Encoder
 import io.circe.generic.JsonCodec
-import pl.touk.nussknacker.engine.api.displayedgraph.DisplayableProcess
-import pl.touk.nussknacker.engine.api.process.{ProcessIdWithName, VersionId}
+import pl.touk.nussknacker.engine.api.process.{ProcessIdWithName, ProcessName, VersionId}
 import pl.touk.nussknacker.restmodel.scenariodetails.ScenarioWithDetails
 import pl.touk.nussknacker.ui.NuDesignerError
 import pl.touk.nussknacker.ui.NuDesignerError.XError
-import pl.touk.nussknacker.ui.process.{ProcessService, ScenarioQuery}
-import pl.touk.nussknacker.ui.process.ProcessService.{FetchScenarioGraph, GetScenarioWithDetailsOptions}
+import pl.touk.nussknacker.ui.process.ProcessService.GetScenarioWithDetailsOptions
 import pl.touk.nussknacker.ui.process.migrate.{RemoteEnvironment, RemoteEnvironmentCommunicationError}
+import pl.touk.nussknacker.ui.process.{ProcessService, ScenarioQuery}
 import pl.touk.nussknacker.ui.security.api.LoggedUser
-import pl.touk.nussknacker.ui.util.{EspPathMatchers, ProcessComparator}
+import pl.touk.nussknacker.ui.util.{NuPathMatchers, ScenarioGraphComparator}
 
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -31,15 +30,18 @@ class RemoteEnvironmentResources(
     with RouteWithUser
     with AuthorizeProcessDirectives
     with ProcessDirectives
-    with EspPathMatchers {
+    with NuPathMatchers {
 
   def securedRoute(implicit user: LoggedUser): Route = {
     pathPrefix("remoteEnvironment") {
+      // TODO This endpoint is used by an external project. We should consider moving its logic to this project
+      //      Currently it only compose result of processes endpoints and an endpoint below but with
+      //      the latest remote version instead of the specific one
       path("compare") {
         get {
           complete {
             for {
-              processes <- processService.getProcessesWithDetails(
+              processes <- processService.getLatestProcessesWithDetails(
                 ScenarioQuery.unarchived,
                 GetScenarioWithDetailsOptions.withsScenarioGraph
               )
@@ -48,25 +50,37 @@ class RemoteEnvironmentResources(
           }
         }
       } ~
-        path(Segment / VersionIdSegment / "compare" / VersionIdSegment) { (processName, version, otherVersion) =>
-          (get & processId(processName)) { processIdWithName =>
+        path(ProcessNameSegment / VersionIdSegment / "compare" / VersionIdSegment) {
+          (processName, version, otherVersion) =>
+            (get & processId(processName)) { processIdWithName =>
+              complete {
+                withProcess(
+                  processIdWithName,
+                  version,
+                  details =>
+                    remoteEnvironment.compare(details.scenarioGraphUnsafe, processIdWithName.name, Some(otherVersion))
+                )
+              }
+            }
+        } ~
+        path(ProcessNameSegment / VersionIdSegment / "migrate") { (processName, version) =>
+          (post & processId(processName)) { processIdWithName =>
             complete {
               withProcess(
                 processIdWithName,
                 version,
-                (process, _) => remoteEnvironment.compare(process, Some(otherVersion))
+                details =>
+                  remoteEnvironment.migrate(
+                    details.scenarioGraphUnsafe,
+                    details.name,
+                    details.parameters,
+                    details.isFragment
+                  )
               )
             }
           }
         } ~
-        path(Segment / VersionIdSegment / "migrate") { (processName, version) =>
-          (post & processId(processName)) { processIdWithName =>
-            complete {
-              withProcess(processIdWithName, version, remoteEnvironment.migrate)
-            }
-          }
-        } ~
-        path(Segment / "versions") { processName =>
+        path(ProcessNameSegment / "versions") { processName =>
           (get & processId(processName)) { processId =>
             complete {
               remoteEnvironment.processVersions(processId.name)
@@ -79,7 +93,7 @@ class RemoteEnvironmentResources(
   private def compareProcesses(
       processes: List[ScenarioWithDetails]
   )(implicit ec: ExecutionContext): Future[Either[NuDesignerError, EnvironmentComparisonResult]] = {
-    val results = Future.sequence(processes.map(p => compareOneProcess(p.scenarioGraphUnsafe)))
+    val results = Future.sequence(processes.map(compareOneProcess))
     results.map { comparisonResult =>
       comparisonResult
         .sequence[XError, ProcessDifference]
@@ -91,7 +105,7 @@ class RemoteEnvironmentResources(
   private def withProcess[T: Encoder](
       processIdWithName: ProcessIdWithName,
       version: VersionId,
-      fun: (DisplayableProcess, String) => Future[Either[NuDesignerError, T]]
+      fun: ScenarioWithDetails => Future[Either[NuDesignerError, T]]
   )(implicit user: LoggedUser) = {
     processService
       .getProcessWithDetails(
@@ -99,17 +113,17 @@ class RemoteEnvironmentResources(
         version,
         GetScenarioWithDetailsOptions.withsScenarioGraph
       )
-      .flatMap(details => fun(details.scenarioGraphUnsafe, details.processCategory))
+      .flatMap(fun)
       .map(NuDesignerErrorToHttp.toResponseEither[T])
   }
 
   private def compareOneProcess(
-      process: DisplayableProcess
+      scenarioWithDetails: ScenarioWithDetails
   )(implicit ec: ExecutionContext): Future[XError[ProcessDifference]] = {
-    remoteEnvironment.compare(process, None).map {
-      case Right(differences) => Right(ProcessDifference(process.id, presentOnOther = true, differences))
+    remoteEnvironment.compare(scenarioWithDetails.scenarioGraphUnsafe, scenarioWithDetails.name, None).map {
+      case Right(differences) => Right(ProcessDifference(scenarioWithDetails.name, presentOnOther = true, differences))
       case Left(RemoteEnvironmentCommunicationError(StatusCodes.NotFound, _)) =>
-        Right(ProcessDifference(process.id, presentOnOther = false, Map()))
+        Right(ProcessDifference(scenarioWithDetails.name, presentOnOther = false, Map()))
       case Left(error) => Left(error)
     }
   }
@@ -120,9 +134,10 @@ class RemoteEnvironmentResources(
 @JsonCodec final case class EnvironmentComparisonResult(processDifferences: List[ProcessDifference])
 
 @JsonCodec final case class ProcessDifference(
-    id: String,
+    name: ProcessName,
     presentOnOther: Boolean,
-    differences: Map[String, ProcessComparator.Difference]
+    differences: Map[String, ScenarioGraphComparator.Difference]
 ) {
+
   def areSame: Boolean = presentOnOther && differences.isEmpty
 }

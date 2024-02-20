@@ -4,8 +4,9 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import pl.touk.nussknacker.engine.util.config.ConfigFactoryExt
 import pl.touk.nussknacker.engine.{ModelData, ProcessingTypeConfig}
+import pl.touk.nussknacker.test.config.ConfigWithScalaVersion
+import pl.touk.nussknacker.test.utils.domain.TestFactory
 import pl.touk.nussknacker.ui.config.DesignerConfigLoader
-import pl.touk.nussknacker.ui.util.ConfigWithScalaVersion
 
 import java.net.URI
 import java.nio.file.Files
@@ -17,10 +18,11 @@ class ConfigurationTest extends AnyFunSuite with Matchers {
   private def globalConfig = ConfigWithScalaVersion.TestsConfig
 
   private def modelData: ModelData = ModelData(
-    ProcessingTypeConfig.read(ConfigWithScalaVersion.StreamingProcessTypeConfig)
+    ProcessingTypeConfig.read(ConfigWithScalaVersion.StreamingProcessTypeConfig),
+    TestFactory.modelDependencies
   )
 
-  private lazy val modelDataConfig = modelData.processConfig
+  private lazy val modelDataConfig = modelData.modelConfig
 
   private def classLoader = {
     getClass.getClassLoader

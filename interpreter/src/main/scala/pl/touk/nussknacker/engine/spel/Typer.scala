@@ -11,20 +11,15 @@ import org.springframework.expression.common.{CompositeStringExpression, Literal
 import org.springframework.expression.spel.ast._
 import org.springframework.expression.spel.{SpelNode, standard}
 import org.springframework.expression.{EvaluationContext, Expression}
-import pl.touk.nussknacker.engine.TypeDefinitionSet
 import pl.touk.nussknacker.engine.api.Context
 import pl.touk.nussknacker.engine.api.context.ValidationContext
-import pl.touk.nussknacker.engine.api.dict.DictRegistry
 import pl.touk.nussknacker.engine.api.expression._
 import pl.touk.nussknacker.engine.api.generics.ExpressionParseError
-import pl.touk.nussknacker.engine.api.typed.supertype.{
-  CommonSupertypeFinder,
-  NumberTypesPromotionStrategy,
-  SupertypeClassResolutionStrategy
-}
+import pl.touk.nussknacker.engine.api.typed.supertype.{CommonSupertypeFinder, NumberTypesPromotionStrategy}
 import pl.touk.nussknacker.engine.api.typed.typing._
-import pl.touk.nussknacker.engine.definition.ProcessDefinitionExtractor.ExpressionDefinition
-import pl.touk.nussknacker.engine.dict.{KeysDictTyper, LabelsDictTyper, SpelDictTyper}
+import pl.touk.nussknacker.engine.definition.clazz.ClassDefinitionSet
+import pl.touk.nussknacker.engine.definition.globalvariables.ExpressionConfigDefinition
+import pl.touk.nussknacker.engine.dict.SpelDictTyper
 import pl.touk.nussknacker.engine.expression.NullExpression
 import pl.touk.nussknacker.engine.spel.SpelExpressionParseError.IllegalOperationError._
 import pl.touk.nussknacker.engine.spel.SpelExpressionParseError.MissingObjectError.{
@@ -42,7 +37,6 @@ import pl.touk.nussknacker.engine.spel.SpelExpressionParseError.SelectionProject
 }
 import pl.touk.nussknacker.engine.spel.SpelExpressionParseError.TernaryOperatorError.{
   InvalidTernaryOperator,
-  TernaryOperatorMismatchTypesError,
   TernaryOperatorNotBooleanError
 }
 import pl.touk.nussknacker.engine.spel.SpelExpressionParseError.UnsupportedOperationError.{
@@ -62,11 +56,10 @@ import scala.reflect.runtime._
 import scala.util.{Failure, Success, Try}
 
 private[spel] class Typer(
-    commonSupertypeFinder: CommonSupertypeFinder,
     dictTyper: SpelDictTyper,
     strictMethodsChecking: Boolean,
     staticMethodInvocationsChecking: Boolean,
-    typeDefinitionSet: TypeDefinitionSet,
+    classDefinitionSet: ClassDefinitionSet,
     evaluationContextPreparer: EvaluationContextPreparer,
     methodExecutionForUnknownAllowed: Boolean,
     dynamicPropertyAccessAllowed: Boolean
@@ -77,9 +70,9 @@ private[spel] class Typer(
   private lazy val evaluationContext: EvaluationContext =
     evaluationContextPreparer.prepareEvaluationContext(Context(""), Map.empty)
 
-  private val methodReferenceTyper = new MethodReferenceTyper(typeDefinitionSet, methodExecutionForUnknownAllowed)
+  private val methodReferenceTyper = new MethodReferenceTyper(classDefinitionSet, methodExecutionForUnknownAllowed)
 
-  private lazy val typeReferenceTyper = new TypeReferenceTyper(evaluationContext, typeDefinitionSet)
+  private lazy val typeReferenceTyper = new TypeReferenceTyper(evaluationContext, classDefinitionSet)
 
   type TypingR[T]       = Writer[List[ExpressionParseError], T]
   type NodeTypingResult = TypingR[CollectedTypingResult]
@@ -178,13 +171,40 @@ private[spel] class Typer(
         throw new SpelCompilationException(node, e)
     }
 
-    def typeUnion(e: Indexer, possibleTypes: Set[SingleTypingResult]): NodeTypingResult = {
-      val typedPossibleTypes = possibleTypes.map(possibleType => typeIndexer(e, possibleType)).toList
+    def typeUnion(e: Indexer, union: TypedUnion): NodeTypingResult = {
+      val typedPossibleTypes = union.possibleTypes.map(possibleType => typeIndexer(e, possibleType))
 
       val typingResult = typedPossibleTypes.sequence
-        .map(_.map(_.finalResult.typingResult).toSet)
-        .map(typingResults => Typed.apply(typingResults))
+        .map(_.map(_.finalResult.typingResult))
+        .map(typingResults => Typed(typingResults))
       typingResult.map(toNodeResult)
+    }
+
+    def typeFieldNameReferenceOnRecord(indexString: String, record: TypedObjectTypingResult): TypingR[TypingResult] = {
+      val fieldIndexedByLiteralStringOpt = record.fields.find(_._1 == indexString)
+      fieldIndexedByLiteralStringOpt.map(f => valid(f._2)).getOrElse {
+        if (dynamicPropertyAccessAllowed) valid(Unknown) else invalid(NoPropertyError(record, indexString))
+      }
+    }
+
+    def typeIndexerOnRecord(indexer: Indexer, record: TypedObjectTypingResult) = {
+      withTypedChildren {
+        case TypedObjectWithValue(_, indexString: String) :: Nil =>
+          // Children are typed in a non-obvious way in case of PropertyOrFieldReference
+          indexer.children match {
+            case (ref: PropertyOrFieldReference) :: Nil => typeFieldNameReferenceOnRecord(ref.getName, record)
+            case _                                      => typeFieldNameReferenceOnRecord(indexString, record)
+          }
+        case indexKey :: Nil if indexKey.canBeSubclassOf(Typed[String]) =>
+          if (dynamicPropertyAccessAllowed) valid(Unknown) else invalid(DynamicPropertyAccessError)
+        case _ :: Nil =>
+          indexer.children match {
+            case (ref: PropertyOrFieldReference) :: Nil => typeFieldNameReferenceOnRecord(ref.getName, record)
+            case _ => if (dynamicPropertyAccessAllowed) valid(Unknown) else invalid(DynamicPropertyAccessError)
+          }
+        case _ =>
+          invalid(IllegalIndexingOperation)
+      }
     }
 
     @tailrec
@@ -192,12 +212,18 @@ private[spel] class Typer(
       typingResult match {
         case TypedClass(clazz, param :: Nil)
             if clazz.isAssignableFrom(classOf[java.util.List[_]]) || clazz.isAssignableFrom(classOf[Array[Object]]) =>
+          // TODO: validate indexer key - the only valid key is an integer - but its more complicated with references
           validNodeResult(param)
         case TypedClass(clazz, keyParam :: valueParam :: Nil) if clazz.isAssignableFrom(classOf[java.util.Map[_, _]]) =>
           validNodeResult(valueParam)
         case d: TypedDict                    => dictTyper.typeDictValue(d, e).map(toNodeResult)
-        case TypedUnion(possibleTypes)       => typeUnion(e, possibleTypes)
+        case union: TypedUnion               => typeUnion(e, union)
         case TypedTaggedValue(underlying, _) => typeIndexer(e, underlying)
+        case r: TypedObjectTypingResult      => typeIndexerOnRecord(e, r)
+        // TODO: add indexing on strings
+        // TODO: how to handle other cases?
+        case TypedNull =>
+          invalidNodeResult(IllegalIndexingOperation)
         case _ =>
           val w = validNodeResult(Unknown)
           if (dynamicPropertyAccessAllowed) w else w.tell(List(DynamicPropertyAccessError))
@@ -233,14 +259,20 @@ private[spel] class Typer(
           val className  = e.getChild(0).toStringAST
           val classToUse = Try(evaluationContext.getTypeLocator.findType(className)).toOption
           // TODO: validate constructor parameters...
-          val clazz = classToUse.flatMap(kl => typeDefinitionSet.get(kl).map(_.clazzName))
+          val clazz = classToUse.flatMap(kl => classDefinitionSet.get(kl).map(_.clazzName))
           clazz match {
             case Some(typedClass) => valid(typedClass)
             case None             => invalid(ConstructionOfUnknown(classToUse))
           }
         }
-
-      case e: Elvis => withTypedChildren(l => valid(Typed(l.toSet)))
+      case e: Elvis =>
+        withTypedChildren {
+          case first :: second :: Nil => valid(Typed(first, second))
+          case other =>
+            throw new IllegalStateException(
+              s"Illegal construction of elvis. Found ${other.size} children, but 2 children expected"
+            )
+        }
       // TODO: what should be here?
       case e: FunctionReference => validNodeResult(Unknown)
 
@@ -257,11 +289,9 @@ private[spel] class Typer(
 
       case e: InlineList =>
         withTypedChildren { children =>
-          val localSupertypeFinder = new CommonSupertypeFinder(SupertypeClassResolutionStrategy.AnySuperclass, true)
           def getSupertype(a: TypingResult, b: TypingResult): TypingResult =
-            localSupertypeFinder.commonSupertype(a, b)(NumberTypesPromotionStrategy.ToSupertype)
+            CommonSupertypeFinder.Default.commonSupertype(a, b)
 
-          // We don't want Typed.empty here, as currently it means it won't validate for any signature
           val elementType = if (children.isEmpty) Unknown else children.reduce(getSupertype)
           valid(Typed.genericTypeClass[java.util.List[_]](List(elementType)))
         }
@@ -280,7 +310,7 @@ private[spel] class Typer(
           if (literalKeys.size != keys.size) {
             invalid(MapWithExpressionKeysError)
           } else {
-            valid(TypedObjectTypingResult(literalKeys.zip(typedValues).toMap))
+            valid(Typed.record(literalKeys.zip(typedValues).toMap))
           }
         }
       case e: MethodReference =>
@@ -310,10 +340,8 @@ private[spel] class Typer(
       case e: OpMinus =>
         withTypedChildren {
           case left :: right :: Nil if left.canBeSubclassOf(Typed[Number]) && right.canBeSubclassOf(Typed[Number]) =>
-            val supertype = commonSupertypeFinder
-              .commonSupertype(left, right)(NumberTypesPromotionStrategy.ForMathOperation)
-              .withoutValue
-            operationOnTypesValue[Number, Number, Number](left, right, supertype)((n1, n2) =>
+            val fallback = NumberTypesPromotionStrategy.ForMathOperation.promote(left, right)
+            operationOnTypesValue[Number, Number, Number](left, right, fallback)((n1, n2) =>
               Valid(MathUtils.minus(n1, n2))
             )
           case left :: right :: Nil if left == right =>
@@ -355,10 +383,8 @@ private[spel] class Typer(
               Valid(l.toString + r.toString)
             )
           case left :: right :: Nil if left.canBeSubclassOf(Typed[Number]) && right.canBeSubclassOf(Typed[Number]) =>
-            val supertype = commonSupertypeFinder
-              .commonSupertype(left, right)(NumberTypesPromotionStrategy.ForMathOperation)
-              .withoutValue
-            operationOnTypesValue[Number, Number, Number](left, right, supertype)((n1, n2) =>
+            val fallback = NumberTypesPromotionStrategy.ForMathOperation.promote(left, right)
+            operationOnTypesValue[Number, Number, Number](left, right, fallback)((n1, n2) =>
               Valid(MathUtils.plus(n1, n2))
             )
           case left :: right :: Nil =>
@@ -411,17 +437,12 @@ private[spel] class Typer(
       case e: Ternary =>
         withTypedChildren {
           case condition :: onTrue :: onFalse :: Nil =>
-            val superType =
-              commonSupertypeFinder.commonSupertype(onTrue, onFalse)(NumberTypesPromotionStrategy.ToSupertype)
             for {
               _ <- Option(condition)
                 .filter(_.canBeSubclassOf(Typed[Boolean]))
                 .map(valid)
                 .getOrElse(invalid(TernaryOperatorNotBooleanError(condition)))
-              result <-
-                if (superType == Typed.empty) invalid(TernaryOperatorMismatchTypesError(onTrue, onFalse))
-                else valid(superType)
-            } yield result
+            } yield CommonSupertypeFinder.Default.commonSupertype(onTrue, onFalse)
           case _ =>
             invalid(InvalidTernaryOperator) // shouldn't happen
         }
@@ -498,10 +519,10 @@ private[spel] class Typer(
       node: Operator
   ): TypingR[TypingResult] = {
     val w = valid(Typed[Boolean])
-    if (commonSupertypeFinder.commonSupertype(left, right)(NumberTypesPromotionStrategy.ToSupertype) != Typed.empty) {
-      w
-    } else
-      w.tell(List(OperatorNotComparableError(node.getOperatorName, left, right)))
+    CommonSupertypeFinder.Intersection
+      .commonSupertypeOpt(left, right)
+      .map(_ => w)
+      .getOrElse(w.tell(List(OperatorNotComparableError(node.getOperatorName, left, right))))
   }
 
   private def checkTwoOperandsArithmeticOperation(
@@ -513,13 +534,13 @@ private[spel] class Typer(
   )(implicit numberPromotionStrategy: NumberTypesPromotionStrategy): TypingR[CollectedTypingResult] = {
     typeChildren(validationContext, node, current) {
       case left :: right :: Nil if left.canBeSubclassOf(Typed[Number]) && right.canBeSubclassOf(Typed[Number]) =>
-        val supertype = commonSupertypeFinder.commonSupertype(left, right).withoutValue
+        val fallback = numberPromotionStrategy.promote(left, right)
         op
-          .map(operationOnTypesValue[Number, Number, Any](left, right, supertype)(_))
-          .getOrElse(valid(supertype))
+          .map(operationOnTypesValue[Number, Number, Any](left, right, fallback)(_))
+          .getOrElse(valid(fallback))
       case left :: right :: Nil =>
-        val supertype = commonSupertypeFinder.commonSupertype(left, right).withoutValue
-        invalid(OperatorMismatchTypeError(node.getOperatorName, left, right), fallbackType = supertype)
+        val fallback = CommonSupertypeFinder.Default.commonSupertype(left, right).withoutValue
+        invalid(OperatorMismatchTypeError(node.getOperatorName, left, right), fallbackType = fallback)
       case _ =>
         invalid(BadOperatorConstructionError(node.getOperatorName)) // shouldn't happen
     }
@@ -552,15 +573,15 @@ private[spel] class Typer(
       invalid(IllegalPropertyAccessError(TypedNull), fallbackType = TypedNull)
     case s: SingleTypingResult =>
       extractSingleProperty(e)(s)
-    case TypedUnion(possible) =>
-      val l = possible.toList
+    case union: TypedUnion =>
+      val l = union.possibleTypes
         .map(single => extractSingleProperty(e)(single))
         .filter(_.written.isEmpty)
         .map(_.value)
-      if (l.isEmpty) {
-        invalid(NoPropertyError(t, e.getName))
-      } else
-        valid(Typed(l.toSet))
+      NonEmptyList
+        .fromList(l)
+        .map(nel => valid(Typed(nel)))
+        .getOrElse(invalid(NoPropertyError(t, e.getName)))
   }
 
   private def extractMethodReference(
@@ -595,14 +616,14 @@ private[spel] class Typer(
       case typedObjectWithData: TypedObjectWithData =>
         extractSingleProperty(e)(typedObjectWithData.objType)
       case typedClass: TypedClass =>
-        propertyTypeBasedOnMethod(typedClass, e)
+        propertyTypeBasedOnMethod(typedClass, typedClass, e)
           .orElse(MapLikePropertyTyper.mapLikeValueType(typedClass))
           .map(valid)
           .getOrElse(invalid(NoPropertyError(t, e.getName)))
-      case TypedObjectTypingResult(fields, objType, _) =>
+      case recordType @ TypedObjectTypingResult(fields, objType, _) =>
         val typeBasedOnFields = fields.get(e.getName)
         typeBasedOnFields
-          .orElse(propertyTypeBasedOnMethod(objType, e))
+          .orElse(propertyTypeBasedOnMethod(objType, recordType, e))
           .map(valid)
           .getOrElse(invalid(NoPropertyError(t, e.getName)))
       case dict: TypedDict =>
@@ -610,8 +631,12 @@ private[spel] class Typer(
     }
   }
 
-  private def propertyTypeBasedOnMethod(typedClass: TypedClass, e: PropertyOrFieldReference) = {
-    typeDefinitionSet.get(typedClass.klass).flatMap(_.getPropertyOrFieldType(e.getName))
+  private def propertyTypeBasedOnMethod(
+      clazz: TypedClass,
+      invocationTarget: TypingResult,
+      e: PropertyOrFieldReference
+  ) = {
+    classDefinitionSet.get(clazz.klass).flatMap(_.getPropertyOrFieldType(invocationTarget, e.getName))
   }
 
   private def extractIterativeType(parent: TypingResult): TypingR[TypingResult] = parent match {
@@ -619,7 +644,7 @@ private[spel] class Typer(
       valid(tc.objType.params.headOption.getOrElse(Unknown))
     case tc: SingleTypingResult if tc.objType.canBeSubclassOf(Typed[java.util.Map[_, _]]) =>
       valid(
-        TypedObjectTypingResult(
+        Typed.record(
           Map(
             "key"   -> tc.objType.params.headOption.getOrElse(Unknown),
             "value" -> tc.objType.params.drop(1).headOption.getOrElse(Unknown)
@@ -671,11 +696,10 @@ private[spel] class Typer(
 
   def withDictTyper(dictTyper: SpelDictTyper) =
     new Typer(
-      commonSupertypeFinder,
       dictTyper,
       strictMethodsChecking = strictMethodsChecking,
       staticMethodInvocationsChecking,
-      typeDefinitionSet,
+      classDefinitionSet,
       evaluationContextPreparer,
       methodExecutionForUnknownAllowed,
       dynamicPropertyAccessAllowed
@@ -687,22 +711,17 @@ object Typer {
 
   def default(
       classLoader: ClassLoader,
-      expressionConfig: ExpressionDefinition[_],
+      expressionConfig: ExpressionConfigDefinition,
       spelDictTyper: SpelDictTyper,
-      typeDefinitionSet: TypeDefinitionSet
+      classDefinitionSet: ClassDefinitionSet
   ): Typer = {
     val evaluationContextPreparer = EvaluationContextPreparer.default(classLoader, expressionConfig)
 
-    val strictTypeChecking = expressionConfig.strictTypeChecking
-    val classResolutionStrategy =
-      if (strictTypeChecking) SupertypeClassResolutionStrategy.Intersection else SupertypeClassResolutionStrategy.Union
-    val commonSupertypeFinder = new CommonSupertypeFinder(classResolutionStrategy, strictTypeChecking)
     new Typer(
-      commonSupertypeFinder,
       spelDictTyper,
       expressionConfig.strictMethodsChecking,
       expressionConfig.staticMethodInvocationsChecking,
-      typeDefinitionSet,
+      classDefinitionSet,
       evaluationContextPreparer,
       expressionConfig.methodExecutionForUnknownAllowed,
       expressionConfig.dynamicPropertyAccessAllowed

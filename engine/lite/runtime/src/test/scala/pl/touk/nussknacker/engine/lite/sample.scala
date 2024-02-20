@@ -6,10 +6,14 @@ import cats.data.{State, StateT, ValidatedNel}
 import com.typesafe.config.ConfigFactory
 import pl.touk.nussknacker.engine.Interpreter.InterpreterShape
 import pl.touk.nussknacker.engine.api._
-import pl.touk.nussknacker.engine.api.component.{ComponentType, NodeComponentInfo}
+import pl.touk.nussknacker.engine.api.component.{
+  ComponentDefinition,
+  ComponentType,
+  NodeComponentInfo,
+  UnboundedStreamComponent
+}
 import pl.touk.nussknacker.engine.api.definition.Parameter
 import pl.touk.nussknacker.engine.api.exception.NuExceptionInfo
-import pl.touk.nussknacker.engine.api.process.WithCategories.anyCategory
 import pl.touk.nussknacker.engine.api.process._
 import pl.touk.nussknacker.engine.api.test.{ScenarioTestData, TestRecord, TestRecordParser}
 import pl.touk.nussknacker.engine.api.typed.typing.{Typed, Unknown}
@@ -30,7 +34,8 @@ import pl.touk.nussknacker.engine.lite.capabilities.FixedCapabilityTransformer
 import pl.touk.nussknacker.engine.resultcollector.ProductionServiceInvocationCollector
 import pl.touk.nussknacker.engine.testing.LocalModelData
 import pl.touk.nussknacker.engine.testmode.TestProcess.TestResults
-import pl.touk.nussknacker.engine.util.SynchronousExecutionContext.ctx
+import pl.touk.nussknacker.engine.util.SynchronousExecutionContextAndIORuntime
+import pl.touk.nussknacker.engine.util.SynchronousExecutionContextAndIORuntime.syncEc
 
 import scala.concurrent.duration.DurationInt
 import scala.concurrent.{Await, Future}
@@ -56,10 +61,9 @@ object sample {
 
     import InterpreterShape._
 
-    override def monad: Monad[StateType] = implicitly[Monad[StateType]]
-
-    override def fromFuture[T]: Future[T] => StateType[Either[T, Throwable]] =
-      f => StateT.pure(Await.result(transform(f), 1 second))
+    override def fromFuture[T]: Future[T] => StateType[Either[T, Throwable]] = { f =>
+      StateT.pure(Await.result(transform(f)(SynchronousExecutionContextAndIORuntime.syncEc), 1 second))
+    }
 
   }
 
@@ -67,7 +71,19 @@ object sample {
 
   type StateType[M] = State[Map[String, Double], M]
 
-  val modelData: LocalModelData = LocalModelData(ConfigFactory.empty(), StateConfigCreator)
+  private val components: List[ComponentDefinition] = List(
+    ComponentDefinition("sum", SumTransformerFactory),
+    ComponentDefinition("start", SimpleSourceFactory),
+    ComponentDefinition("parametersSupport", SimpleSourceWithParameterTestingFactory),
+    ComponentDefinition("failOnNumber1Source", FailOnNumber1SourceFactory),
+    ComponentDefinition("failOnNumber1", FailOnNumber1),
+    ComponentDefinition("noOpProcessor", NoOpProcessor),
+    ComponentDefinition("sumNumbers", SumNumbers),
+    ComponentDefinition("end", SimpleSinkFactory)
+  )
+
+  private val modelData: LocalModelData =
+    LocalModelData(ConfigFactory.empty(), components, configCreator = WithUtilConfigCreator)
 
   def run(
       scenario: CanonicalProcess,
@@ -90,25 +106,26 @@ object sample {
     resultWithInitialState
   }
 
-  def test(scenario: CanonicalProcess, scenarioTestData: ScenarioTestData): TestResults[Any] = {
+  def test(scenario: CanonicalProcess, scenarioTestData: ScenarioTestData): TestResults = {
     implicit val effectUnwrapper: EffectUnwrapper[StateType] = new EffectUnwrapper[StateType] {
       override def apply[A](fa: StateType[A]): A = fa.runA(Map.empty).value
     }
     val testRunner = new InterpreterTestRunner[StateType, SampleInput, AnyRef]
-    testRunner.runTest(modelData, scenarioTestData, scenario, identity)
+    testRunner.runTest(modelData, scenarioTestData, scenario)
   }
 
   class SumTransformer(name: String, outputVar: String, value: LazyParameter[java.lang.Double])
       extends ContextMappingComponent {
 
-    override def createStateTransformation[F[_]: Monad](context: CustomComponentContext[F]): Context => F[Context] = {
-      val interpreter = context.interpreter.syncInterpretationFunction(value)
+    override def createStateTransformation[F[_]: Monad](
+        context: CustomComponentContext[F]
+    ): Context => F[Context] = {
       val convert = context.capabilityTransformer
         .transform[StateType]
         .getOrElse(throw new IllegalArgumentException("No capability!"))
       (ctx: Context) =>
         convert(State((current: Map[String, Double]) => {
-          val newValue = current.getOrElse(name, 0d) + interpreter(ctx)
+          val newValue = current.getOrElse(name, 0d) + value.evaluate(ctx)
           (current + (name -> newValue), ctx.withVariable(outputVar, newValue))
         }))
     }
@@ -119,38 +136,12 @@ object sample {
     def largestListElement(list: java.util.List[Long]): Long = list.asScala.max
   }
 
-  object StateConfigCreator extends EmptyProcessConfigCreator {
+  object WithUtilConfigCreator extends EmptyProcessConfigCreator {
 
-    override def customStreamTransformers(
-        processObjectDependencies: ProcessObjectDependencies
-    ): Map[String, WithCategories[CustomStreamTransformer]] =
-      Map("sum" -> WithCategories.anyCategory(SumTransformerFactory))
-
-    override def sourceFactories(
-        processObjectDependencies: ProcessObjectDependencies
-    ): Map[String, WithCategories[SourceFactory]] =
-      Map(
-        "start"               -> WithCategories.anyCategory(SimpleSourceFactory),
-        "parametersSupport"   -> WithCategories.anyCategory(SimpleSourceWithParameterTestingFactory),
-        "failOnNumber1Source" -> WithCategories.anyCategory(FailOnNumber1SourceFactory)
-      )
-
-    override def services(processObjectDependencies: ProcessObjectDependencies): Map[String, WithCategories[Service]] =
-      Map(
-        "failOnNumber1" -> WithCategories.anyCategory(FailOnNumber1),
-        "noOpProcessor" -> WithCategories.anyCategory(NoOpProcessor),
-        "sumNumbers"    -> WithCategories.anyCategory(SumNumbers),
-      )
-
-    override def sinkFactories(
-        processObjectDependencies: ProcessObjectDependencies
-    ): Map[String, WithCategories[SinkFactory]] =
-      Map("end" -> WithCategories.anyCategory(SimpleSinkFactory))
-
-    override def expressionConfig(processObjectDependencies: ProcessObjectDependencies): ExpressionConfig =
+    override def expressionConfig(modelDependencies: ProcessObjectDependencies): ExpressionConfig =
       ExpressionConfig(
         Map("UTIL" -> WithCategories.anyCategory(new UtilHelpers)),
-        List()
+        List.empty
       )
 
   }
@@ -187,7 +178,7 @@ object sample {
 
   }
 
-  object SimpleSourceFactory extends SourceFactory {
+  object SimpleSourceFactory extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke
     def create(): Source = new LiteSource[SampleInput] with SourceTestSupport[SampleInput] {
@@ -206,7 +197,7 @@ object sample {
 
   }
 
-  object FailOnNumber1SourceFactory extends SourceFactory {
+  object FailOnNumber1SourceFactory extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke
     def create()(implicit nodeId: NodeId): Source = new LiteSource[SampleInput] {
@@ -218,7 +209,7 @@ object sample {
           if (input.value == 1) {
             Invalid(
               NuExceptionInfo(
-                Some(NodeComponentInfo(nodeId.id, "failOnNumber1SourceFactory", ComponentType.Source)),
+                Some(NodeComponentInfo(nodeId.id, ComponentType.Source, "failOnNumber1SourceFactory")),
                 SourceFailure,
                 Context(input.contextId)
               )
@@ -232,7 +223,7 @@ object sample {
 
   }
 
-  object SimpleSourceWithParameterTestingFactory extends SourceFactory {
+  object SimpleSourceWithParameterTestingFactory extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke(returnType = classOf[SampleInputWithListAndMap])
     def create(): Source = new LiteSource[SampleInputWithListAndMap]
@@ -265,8 +256,11 @@ object sample {
   object SimpleSinkFactory extends SinkFactory {
 
     @MethodToInvoke
-    def create(@ParamName("value") value: LazyParameter[AnyRef]): LazyParamSink[AnyRef] =
-      (_: LazyParameterInterpreter) => value
+    def create(@ParamName("value") value: LazyParameter[AnyRef]): LazyParamSink[AnyRef] = {
+      new LazyParamSink[AnyRef] {
+        override def prepareResponse: LazyParameter[AnyRef] = value
+      }
+    }
 
   }
 

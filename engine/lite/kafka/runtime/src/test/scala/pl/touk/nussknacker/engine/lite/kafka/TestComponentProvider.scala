@@ -1,41 +1,30 @@
 package pl.touk.nussknacker.engine.lite.kafka
 
-import com.typesafe.config.Config
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.producer.ProducerRecord
 import pl.touk.nussknacker.engine.api._
-import pl.touk.nussknacker.engine.api.component.{ComponentDefinition, ComponentProvider, NussknackerVersion}
-import pl.touk.nussknacker.engine.api.process.{ProcessObjectDependencies, SinkFactory, SourceFactory}
-import pl.touk.nussknacker.engine.api.NodeId
+import pl.touk.nussknacker.engine.api.component.{ComponentDefinition, UnboundedStreamComponent}
+import pl.touk.nussknacker.engine.api.process.{SinkFactory, SourceFactory}
 import pl.touk.nussknacker.engine.lite.api.utils.sinks.LazyParamSink
 import pl.touk.nussknacker.engine.lite.kafka.KafkaTransactionalScenarioInterpreter.Output
-import pl.touk.nussknacker.engine.lite.kafka.TestComponentProvider.{SourceFailure, failingInputValue}
 import pl.touk.nussknacker.engine.lite.kafka.api.LiteKafkaSource
 
-object KafkaFactory {
+//Simplistic Kafka source/sinks, assuming string as value. To be replaced with proper components
+object TestComponentProvider {
+
   final val TopicParamName     = "Topic"
   final val SinkValueParamName = "Value"
-}
 
-//Simplistic Kafka source/sinks, assuming string as value. To be replaced with proper components
-class TestComponentProvider extends ComponentProvider {
+  final val FailingInputValue = "FAIL"
 
-  import KafkaFactory._
+  case object SourceFailure extends Exception("Source failure")
 
-  override def providerName: String = "kafkaSources"
-
-  override def resolveConfigForExecution(config: Config): Config = config
-
-  override def create(config: Config, dependencies: ProcessObjectDependencies): List[ComponentDefinition] = List(
+  val Components: List[ComponentDefinition] = List(
     ComponentDefinition("source", KafkaSource),
     ComponentDefinition("sink", KafkaSink),
   )
 
-  override def isCompatible(version: NussknackerVersion): Boolean = true
-
-  override def isAutoLoaded: Boolean = false
-
-  object KafkaSource extends SourceFactory {
+  object KafkaSource extends SourceFactory with UnboundedStreamComponent {
 
     @MethodToInvoke(returnType = classOf[String])
     def invoke(@ParamName(`TopicParamName`) topicName: String)(implicit nodeIdPassed: NodeId): LiteKafkaSource =
@@ -47,7 +36,7 @@ class TestComponentProvider extends ComponentProvider {
 
         override def transform(record: ConsumerRecord[Array[Byte], Array[Byte]]): Context = {
           val value = new String(record.value())
-          if (value == failingInputValue)
+          if (value == FailingInputValue)
             throw SourceFailure
           Context(contextIdGenerator.nextContextId())
             .withVariable(VariableConstants.EventTimestampVariableName, record.timestamp())
@@ -64,20 +53,13 @@ class TestComponentProvider extends ComponentProvider {
     def invoke(
         @ParamName(`TopicParamName`) topicName: String,
         @ParamName(SinkValueParamName) value: LazyParameter[String]
-    ): LazyParamSink[Output] =
-      (evaluateLazyParameter: LazyParameterInterpreter) => {
-        implicit val epi: LazyParameterInterpreter = evaluateLazyParameter
-        value.map(out => new ProducerRecord[Array[Byte], Array[Byte]](topicName, out.getBytes()))
+    ): LazyParamSink[Output] = {
+      new LazyParamSink[Output] {
+        override def prepareResponse: LazyParameter[Output] =
+          value.map(out => new ProducerRecord[Array[Byte], Array[Byte]](topicName, out.getBytes()))
       }
+    }
 
   }
-
-}
-
-object TestComponentProvider {
-
-  val failingInputValue = "FAIL"
-
-  case object SourceFailure extends Exception("Source failure")
 
 }

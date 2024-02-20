@@ -8,13 +8,13 @@ import pl.touk.nussknacker.engine.build.ScenarioBuilder
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.flink.test.RecordingExceptionConsumer
 import pl.touk.nussknacker.engine.kafka.generic.FlinkKafkaDelayedSourceImplFactory
+import pl.touk.nussknacker.engine.kafka.source.InputMeta
 import pl.touk.nussknacker.engine.kafka.source.delayed.DelayedKafkaSourceFactory.{
   DelayParameterName,
   TimestampFieldParamName
 }
-import pl.touk.nussknacker.engine.process.compiler.FlinkProcessCompiler
+import pl.touk.nussknacker.engine.process.helpers.TestResultsHolder
 import pl.touk.nussknacker.engine.process.helpers.SampleNodes.SinkForLongs
-import pl.touk.nussknacker.engine.process.registrar.FlinkProcessRegistrar
 import pl.touk.nussknacker.engine.schemedkafka.KafkaAvroIntegrationMockSchemaRegistry.schemaRegistryMockClient
 import pl.touk.nussknacker.engine.schemedkafka.KafkaAvroTestProcessConfigCreator
 import pl.touk.nussknacker.engine.schemedkafka.KafkaUniversalComponentTransformer.{
@@ -28,11 +28,7 @@ import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.universal.{
   MockSchemaRegistryClientFactory,
   UniversalSchemaBasedSerdeProvider
 }
-import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.{
-  SchemaBasedSerdeProvider,
-  SchemaRegistryClientFactory,
-  SchemaVersionOption
-}
+import pl.touk.nussknacker.engine.schemedkafka.schemaregistry.{SchemaRegistryClientFactory, SchemaVersionOption}
 import pl.touk.nussknacker.engine.schemedkafka.source.delayed.DelayedUniversalKafkaSourceFactory
 import pl.touk.nussknacker.engine.spel
 import pl.touk.nussknacker.engine.testing.LocalModelData
@@ -40,8 +36,13 @@ import pl.touk.nussknacker.engine.testing.LocalModelData
 import java.time.Instant
 
 trait DelayedUniversalKafkaSourceIntegrationMixinSpec extends KafkaAvroSpecMixin with BeforeAndAfter {
+  protected val sinkForLongsResultsHolder: () => TestResultsHolder[java.lang.Long]
+  protected val sinkForInputMetaResultsHolder: () => TestResultsHolder[InputMeta[_]]
 
-  private lazy val creator: ProcessConfigCreator = new DelayedKafkaUniversalProcessConfigCreator
+  private lazy val creator: ProcessConfigCreator = new DelayedKafkaUniversalProcessConfigCreator(
+    sinkForLongsResultsHolder(),
+    sinkForInputMetaResultsHolder()
+  )
 
   override protected def schemaRegistryClient: MockSchemaRegistryClient = schemaRegistryMockClient
 
@@ -50,12 +51,12 @@ trait DelayedUniversalKafkaSourceIntegrationMixinSpec extends KafkaAvroSpecMixin
 
   override protected def beforeAll(): Unit = {
     super.beforeAll()
-    val modelData = LocalModelData(config, creator)
-    registrar = FlinkProcessRegistrar(new FlinkProcessCompiler(modelData), executionConfigPreparerChain(modelData))
+    modelData = LocalModelData(config, List.empty, creator)
   }
 
   before {
-    SinkForLongs.clear()
+    sinkForLongsResultsHolder().clear()
+    sinkForInputMetaResultsHolder().clear()
   }
 
   protected def runAndVerify(topic: String, process: CanonicalProcess, givenObj: AnyRef): Unit = {
@@ -63,8 +64,8 @@ trait DelayedUniversalKafkaSourceIntegrationMixinSpec extends KafkaAvroSpecMixin
     pushMessage(givenObj, topic)
     run(process) {
       eventually {
-        RecordingExceptionConsumer.dataFor(runId) shouldBe empty
-        SinkForLongs.data should have size 1
+        RecordingExceptionConsumer.exceptionsFor(runId) shouldBe empty
+        sinkForLongsResultsHolder().results should have size 1
       }
     }
   }
@@ -84,27 +85,30 @@ trait DelayedUniversalKafkaSourceIntegrationMixinSpec extends KafkaAvroSpecMixin
       .source(
         "start",
         "kafka-universal-delayed",
-        s"$TopicParamName"          -> s"'${topic}'",
+        s"$TopicParamName"          -> s"'$topic'",
         s"$SchemaVersionParamName"  -> asSpelExpression(formatVersionParam(version)),
-        s"$TimestampFieldParamName" -> s"${timestampField}",
-        s"$DelayParameterName"      -> s"${delay}"
+        s"$TimestampFieldParamName" -> s"$timestampField",
+        s"$DelayParameterName"      -> s"$delay"
       )
       .emptySink("out", "sinkForLongs", SinkValueParamName -> "T(java.time.Instant).now().toEpochMilli()")
   }
 
 }
 
-class DelayedKafkaUniversalProcessConfigCreator extends KafkaAvroTestProcessConfigCreator {
+class DelayedKafkaUniversalProcessConfigCreator(
+    sinkForLongsResultsHolder: => TestResultsHolder[java.lang.Long],
+    sinkForInputMetaResultsHolder: => TestResultsHolder[InputMeta[_]]
+) extends KafkaAvroTestProcessConfigCreator(sinkForInputMetaResultsHolder) {
 
   override def sourceFactories(
-      processObjectDependencies: ProcessObjectDependencies
+      modelDependencies: ProcessObjectDependencies
   ): Map[String, WithCategories[SourceFactory]] = {
     Map(
       "kafka-universal-delayed" -> defaultCategory(
-        new DelayedUniversalKafkaSourceFactory[String, GenericRecord](
+        new DelayedUniversalKafkaSourceFactory(
           schemaRegistryClientFactory,
-          createSchemaBasedMessagesSerdeProvider,
-          processObjectDependencies,
+          UniversalSchemaBasedSerdeProvider.create(schemaRegistryClientFactory),
+          modelDependencies,
           new FlinkKafkaDelayedSourceImplFactory(None, UniversalTimestampFieldAssigner(_))
         )
       )
@@ -112,24 +116,21 @@ class DelayedKafkaUniversalProcessConfigCreator extends KafkaAvroTestProcessConf
   }
 
   override def customStreamTransformers(
-      processObjectDependencies: ProcessObjectDependencies
+      modelDependencies: ProcessObjectDependencies
   ): Map[String, WithCategories[CustomStreamTransformer]] =
     Map.empty
 
   override def sinkFactories(
-      processObjectDependencies: ProcessObjectDependencies
+      modelDependencies: ProcessObjectDependencies
   ): Map[String, WithCategories[SinkFactory]] = {
     Map(
-      "sinkForLongs" -> defaultCategory(SinkForLongs.toSinkFactory)
+      "sinkForLongs" -> defaultCategory(SinkForLongs(sinkForLongsResultsHolder))
     )
   }
 
-  override def expressionConfig(processObjectDependencies: ProcessObjectDependencies): ExpressionConfig = {
-    super.expressionConfig(processObjectDependencies).copy(additionalClasses = List(classOf[Instant]))
+  override def expressionConfig(modelDependencies: ProcessObjectDependencies): ExpressionConfig = {
+    super.expressionConfig(modelDependencies).copy(additionalClasses = List(classOf[Instant]))
   }
-
-  override protected def createSchemaBasedMessagesSerdeProvider: SchemaBasedSerdeProvider =
-    UniversalSchemaBasedSerdeProvider.create(schemaRegistryClientFactory)
 
   override protected def schemaRegistryClientFactory: SchemaRegistryClientFactory =
     MockSchemaRegistryClientFactory.confluentBased(schemaRegistryMockClient)

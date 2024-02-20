@@ -2,24 +2,18 @@ package pl.touk.nussknacker.engine.lite.util.test
 
 import com.typesafe.config.{Config, ConfigFactory}
 import pl.touk.nussknacker.engine.api._
-import pl.touk.nussknacker.engine.api.component.ComponentDefinition
+import pl.touk.nussknacker.engine.api.component.{ComponentDefinition, UnboundedStreamComponent}
 import pl.touk.nussknacker.engine.api.context.ValidationContext
-import pl.touk.nussknacker.engine.api.context.transformation.{NodeDependencyValue, SingleInputGenericNodeTransformation}
+import pl.touk.nussknacker.engine.api.context.transformation.{NodeDependencyValue, SingleInputDynamicComponent}
 import pl.touk.nussknacker.engine.api.definition.{NodeDependency, TypedNodeDependency, WithExplicitTypesToExtract}
-import pl.touk.nussknacker.engine.api.process.{
-  BasicContextInitializer,
-  ComponentUseCase,
-  SinkFactory,
-  Source,
-  SourceFactory,
-  WithCategories
-}
+import pl.touk.nussknacker.engine.api.process._
 import pl.touk.nussknacker.engine.api.typed.typing
 import pl.touk.nussknacker.engine.api.typed.typing.{Typed, TypingResult}
 import pl.touk.nussknacker.engine.canonicalgraph.CanonicalProcess
 import pl.touk.nussknacker.engine.lite.api.interpreterTypes.{ScenarioInputBatch, SourceId}
 import pl.touk.nussknacker.engine.lite.api.utils.sinks.LazyParamSink
 import pl.touk.nussknacker.engine.lite.api.utils.sources.BaseLiteSource
+import pl.touk.nussknacker.engine.lite.components.LiteBaseComponentProvider
 import pl.touk.nussknacker.engine.lite.util.test.SynchronousLiteInterpreter.SynchronousResult
 import pl.touk.nussknacker.engine.util.test.TestScenarioRunner.RunnerListResult
 import pl.touk.nussknacker.engine.util.test._
@@ -94,29 +88,33 @@ class LiteTestScenarioRunner(
     val inputId    = scenario.nodes.head.id
     val inputBatch = ScenarioInputBatch(data.map(d => (SourceId(inputId), d: Any)))
 
-    ModelWithTestExtensions.withExtensions(config, testSource :: testSink :: components, globalVariables) { modelData =>
-      SynchronousLiteInterpreter.run(modelData, scenario, inputBatch, componentUseCase)
-    }
+    val allComponents = testSource ::
+      testSink ::
+      LiteBaseComponentProvider.Components :::
+      components
+    val modelData = ModelWithTestExtensions(config, allComponents, globalVariables)
+    SynchronousLiteInterpreter.run(modelData, scenario, inputBatch, componentUseCase)
   }
 
 }
 
 private[test] class SimpleSourceFactory(result: TypingResult)
     extends SourceFactory
-    with SingleInputGenericNodeTransformation[Source]
-    with WithExplicitTypesToExtract {
+    with SingleInputDynamicComponent[Source]
+    with WithExplicitTypesToExtract
+    with UnboundedStreamComponent {
 
   override type State = Nothing
 
   override def contextTransformation(context: ValidationContext, dependencies: List[NodeDependencyValue])(
       implicit nodeId: NodeId
-  ): NodeTransformationDefinition = { case TransformationStep(Nil, _) =>
+  ): ContextTransformationDefinition = { case TransformationStep(Nil, _) =>
     val finalInitializer = new BasicContextInitializer(result)
     FinalResults.forValidation(context, Nil, None)(finalInitializer.validationContext)
   }
 
   override def implementation(
-      params: Map[String, Any],
+      params: Params,
       dependencies: List[NodeDependencyValue],
       finalState: Option[Nothing]
   ): Source = {
@@ -124,24 +122,27 @@ private[test] class SimpleSourceFactory(result: TypingResult)
       override val nodeId: NodeId = TypedNodeDependency[NodeId].extract(dependencies)
 
       override def transform(record: Any): Context =
-        Context(contextIdGenerator.nextContextId(), Map(VariableConstants.InputVariableName -> record), None)
+        Context(
+          contextIdGenerator.nextContextId(),
+          Map(VariableConstants.InputVariableName -> record),
+          None
+        )
     }
   }
 
   override def nodeDependencies: List[NodeDependency] = TypedNodeDependency[NodeId] :: Nil
 
-  override def typesToExtract: List[typing.TypedClass] = result match {
-    case result: typing.SingleTypingResult => List(result.objType)
-    case typing.TypedUnion(possibleTypes)  => possibleTypes.map(_.objType).toList
-    case typing.TypedNull | typing.Unknown => Nil
-  }
+  override def typesToExtract: List[typing.TypingResult] = List(result)
 
 }
 
 private[test] object SimpleSinkFactory extends SinkFactory {
 
   @MethodToInvoke
-  def create(@ParamName("value") value: LazyParameter[AnyRef]): LazyParamSink[AnyRef] = (_: LazyParameterInterpreter) =>
-    value
+  def create(@ParamName("value") value: LazyParameter[AnyRef]): LazyParamSink[AnyRef] = {
+    new LazyParamSink[AnyRef] {
+      override def prepareResponse: LazyParameter[AnyRef] = value
+    }
+  }
 
 }

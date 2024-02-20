@@ -1,44 +1,38 @@
 package pl.touk.nussknacker.engine.api.component
 
-import pl.touk.nussknacker.engine.api.component.AdditionalUIConfigProvider.SingleComponentConfigWithoutId
+import pl.touk.nussknacker.engine.api.definition.FixedExpressionValue
+import pl.touk.nussknacker.engine.api.parameter.{ParameterValueCompileTimeValidation, ValueInputWithFixedValues}
 
 /**
- * Trait allowing the provision of UI configuration for components and scenario properties, without requiring a model reload.
- *
- * TODO: The current implementation allows providing configs only for standard components - meaning that fragments and base components aren't handled.
+ * Trait allowing the provision of UI configuration for components and scenario properties.
  */
 trait AdditionalUIConfigProvider extends Serializable {
 
-  def getAllForProcessingType(processingType: String): Map[ComponentId, SingleComponentConfigWithoutId]
+  // Takes effect after model reload.
+  def getAllForProcessingType(processingType: String): Map[DesignerWideComponentId, ComponentAdditionalConfig]
 
+  // `ScenarioPropertyConfig.validators` currently does nothing (only usage goes to createUIScenarioPropertyConfig)
+  // Takes effect immediately (doesn't require model reload).
   def getScenarioPropertiesUIConfigs(processingType: String): Map[String, ScenarioPropertyConfig]
 
 }
 
 object AdditionalUIConfigProvider {
   val empty = new DefaultAdditionalUIConfigProvider(Map.empty, Map.empty)
-
-  case class SingleComponentConfigWithoutId(
-      params: Map[String, ParameterConfig],
-      icon: Option[String],
-      docsUrl: Option[String],
-      componentGroup: Option[ComponentGroupName],
-      disabled: Boolean = false
-  ) {
-
-    def toSingleComponentConfig: SingleComponentConfig = SingleComponentConfig(
-      params = Some(params),
-      icon = icon,
-      docsUrl = docsUrl,
-      disabled = disabled,
-      componentGroup = componentGroup,
-      componentId = None
-    )
-
-  }
-
-  object SingleComponentConfigWithoutId {
-    val zero: SingleComponentConfigWithoutId = SingleComponentConfigWithoutId(Map.empty, None, None, None)
-  }
-
 }
+
+case class ComponentAdditionalConfig(
+    parameterConfigs: Map[String, ParameterAdditionalUIConfig],
+    icon: Option[String] = None,
+    docsUrl: Option[String] = None,
+    componentGroup: Option[ComponentGroupName] = None,
+    disabled: Boolean = false
+)
+
+case class ParameterAdditionalUIConfig(
+    required: Boolean,
+    initialValue: Option[FixedExpressionValue],
+    hintText: Option[String],
+    valueEditor: Option[ValueInputWithFixedValues],
+    valueCompileTimeValidation: Option[ParameterValueCompileTimeValidation]
+)
