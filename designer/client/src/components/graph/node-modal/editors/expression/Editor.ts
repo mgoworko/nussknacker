@@ -17,6 +17,7 @@ import { SpelTemplateEditor } from "./SpelTemplateEditor";
 import { Formatter } from "./Formatter";
 import { VariableTypes } from "../../../../../types";
 import { FieldError } from "../Validators";
+import { DictParameterEditor } from "./DictParameterEditor";
 
 export type EditorProps = {
     onValueChange?: (value: string) => void;
@@ -69,7 +70,7 @@ export enum EditorType {
     JSON_PARAMETER_EDITOR = "JsonParameterEditor",
     SQL_PARAMETER_EDITOR = "SqlParameterEditor",
     SPEL_TEMPLATE_PARAMETER_EDITOR = "SpelTemplateParameterEditor",
-    FIXED_VALUES_PRESET_PARAMETER_EDITOR = "FixedValuesPresetParameterEditor",
+    DICT_PARAMETER_EDITOR = "DictParameterEditor",
 }
 
 export const editors: Record<EditorType, SimpleEditor | ExtendedEditor> = {
@@ -88,5 +89,5 @@ export const editors: Record<EditorType, SimpleEditor | ExtendedEditor> = {
     [EditorType.TIME]: TimeEditor,
     [EditorType.SQL_PARAMETER_EDITOR]: SqlEditor,
     [EditorType.SPEL_TEMPLATE_PARAMETER_EDITOR]: SpelTemplateEditor,
-    [EditorType.FIXED_VALUES_PRESET_PARAMETER_EDITOR]: FixedValuesEditor,
+    [EditorType.DICT_PARAMETER_EDITOR]: DictParameterEditor,
 };

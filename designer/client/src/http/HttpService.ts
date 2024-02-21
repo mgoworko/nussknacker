@@ -3,7 +3,7 @@ import { AxiosError, AxiosResponse } from "axios";
 import FileSaver from "file-saver";
 import i18next from "i18next";
 import { Moment } from "moment";
-import { SettingsData, ValidationData, ValidationRequest } from "../actions/nk";
+import { ProcessingType, SettingsData, ValidationData, ValidationRequest } from "../actions/nk";
 import api from "../api";
 import { UserData } from "../common/models/User";
 import {
@@ -694,6 +694,10 @@ class HttpService {
 
     fetchScenarioParametersCombinations() {
         return api.get<ScenarioParametersCombinations>(`/scenarioParametersCombinations`);
+    }
+
+    fetchProcessDefinitionDataDict(processingType: ProcessingType, dictId: string, label: string) {
+        return api.get<any>(`/processDefinitionData/${processingType}/dict/${dictId}/entry?label=${label}`);
     }
 
     #addInfo(message: string) {
