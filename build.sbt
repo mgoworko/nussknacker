@@ -105,6 +105,9 @@ lazy val publishSettings = Seq(
 def defaultMergeStrategy: String => MergeStrategy = {
   // remove JPMS module descriptors (a proper soultion would be to merge them)
   case PathList(ps @ _*) if ps.last == "module-info.class"            => MergeStrategy.discard
+  // this prevents problem with table api in runtime:
+  // https://stackoverflow.com/questions/60436823/issue-when-flink-upload-a-job-with-stream-sql-query
+  case PathList("org", "codehaus", "janino", "CompilerFactory.class") => MergeStrategy.discard
   // we override Spring's class and we want to keep only our implementation
   case PathList(ps @ _*) if ps.last == "NumberUtils.class"            => MergeStrategy.first
   // merge Netty version information files
@@ -468,7 +471,7 @@ componentArtifacts := {
     (liteKafkaComponents / assembly).value           -> "components/lite/liteKafka.jar",
     (liteRequestResponseComponents / assembly).value -> "components/lite/liteRequestResponse.jar",
     (openapiComponents / assembly).value             -> "components/common/openapi.jar",
-    (sqlComponents / assembly).value                 -> "components/common/sql.jar"
+    (sqlComponents / assembly).value                 -> "components/common/sql.jar",
   )
 }
 
@@ -485,8 +488,9 @@ lazy val devArtifacts = taskKey[List[(File, String)]]("dev artifacts")
 
 devArtifacts := {
   modelArtifacts.value ++ List(
-    (flinkDevModel / assembly).value -> "model/devModel.jar",
-    (devPeriodicDM / assembly).value -> "managers/devPeriodicDM.jar"
+    (flinkDevModel / assembly).value                       -> "model/devModel.jar",
+    (devPeriodicDM / assembly).value                       -> "managers/devPeriodicDM.jar",
+    (experimentalFlinkTableApiComponents / assembly).value -> "components/flink-dev/flinkTable.jar",
   )
 }
 
@@ -581,8 +585,9 @@ lazy val flinkDeploymentManager = (project in flink("management"))
         flinkExecutor / Compile / assembly,
         flinkDevModel / Compile / assembly,
         flinkDevModelJava / Compile / assembly,
+        experimentalFlinkTableApiComponents / Compile / assembly,
         flinkBaseComponents / Compile / assembly,
-        flinkKafkaComponents / Compile / assembly
+        flinkKafkaComponents / Compile / assembly,
       )
       .value,
     // flink cannot run tests and deployment concurrently
@@ -661,6 +666,7 @@ lazy val flinkDevModel = (project in flink("management/dev-model"))
     }
   )
   .dependsOn(
+    commonComponents,
     flinkSchemedKafkaComponentsUtils,
     flinkComponentsUtils % Provided,
     // We use some components for testing with embedded engine, because of that we need dependency to this api
@@ -711,16 +717,17 @@ lazy val flinkTests = (project in flink("tests"))
     }
   )
   .dependsOn(
-    defaultModel           % "test",
-    flinkExecutor          % "test",
-    flinkKafkaComponents   % "test",
-    flinkBaseComponents    % "test",
-    flinkTestUtils         % "test",
-    kafkaTestUtils         % "test",
-    flinkComponentsTestkit % "test",
+    defaultModel                        % "test",
+    flinkExecutor                       % "test",
+    flinkKafkaComponents                % "test",
+    flinkBaseComponents                 % "test",
+    experimentalFlinkTableApiComponents % "test",
+    flinkTestUtils                      % "test",
+    kafkaTestUtils                      % "test",
+    flinkComponentsTestkit              % "test",
     // for local development
-    designer               % "test",
-    deploymentManagerApi   % "test"
+    designer                            % "test",
+    deploymentManagerApi                % "test"
   )
 
 lazy val defaultModel = (project in (file("defaultModel")))
@@ -997,7 +1004,13 @@ lazy val flinkComponentsTestkit = (project in utils("flink-components-testkit"))
       )
     }
   )
-  .dependsOn(componentsTestkit, flinkExecutor, flinkTestUtils, flinkBaseComponents, defaultModel)
+  .dependsOn(
+    componentsTestkit,
+    flinkExecutor,
+    flinkTestUtils,
+    flinkBaseComponents,
+    defaultModel
+  )
 
 //this should be only added in scope test - 'module % "test"'
 lazy val liteComponentsTestkit = (project in utils("lite-components-testkit"))
@@ -1186,7 +1199,13 @@ lazy val liteBaseComponents = (project in lite("components/base"))
   .settings(
     name := "nussknacker-lite-base-components",
   )
-  .dependsOn(liteComponentsApi % "provided", componentsUtils % Provided, testUtils % "test", liteEngineRuntime % "test")
+  .dependsOn(
+    commonComponents,
+    liteComponentsApi % Provided,
+    componentsUtils   % Provided,
+    testUtils         % "test",
+    liteEngineRuntime % "test"
+  )
 
 lazy val liteKafkaComponents: Project = (project in lite("components/kafka"))
   .settings(commonSettings)
@@ -1341,7 +1360,7 @@ lazy val liteEngineRuntimeApp: Project = (project in lite("runtime-app"))
       (liteKafkaComponents / assembly).value           -> "components/lite/liteKafka.jar",
       (liteRequestResponseComponents / assembly).value -> "components/lite/liteRequestResponse.jar",
       (openapiComponents / assembly).value             -> "components/common/openapi.jar",
-      (sqlComponents / assembly).value                 -> "components/common/sql.jar"
+      (sqlComponents / assembly).value                 -> "components/common/sql.jar",
     ),
     javaAgents += JavaAgent("io.prometheus.jmx" % "jmx_prometheus_javaagent" % jmxPrometheusJavaagentV % "dist"),
     libraryDependencies ++= Seq(
@@ -1650,6 +1669,26 @@ lazy val sqlComponents = (project in component("sql"))
     liteComponentsTestkit % "test"
   )
 
+lazy val commonComponents = (project in engine("common/components"))
+  .settings(commonSettings)
+  .settings(
+    name := "nussknacker-common-components"
+  )
+  .dependsOn(
+    componentsApi % Provided
+  )
+
+lazy val commonComponentsTests = (project in engine("common/components-tests"))
+  .settings(commonSettings)
+  .settings(
+    name := "nussknacker-common-components-tests"
+  )
+  .dependsOn(
+    commonComponents,
+    liteComponentsTestkit  % "test",
+    flinkComponentsTestkit % "test"
+  )
+
 lazy val flinkBaseComponents = (project in flink("components/base"))
   .settings(commonSettings)
   .settings(assemblyNoScala("flinkBase.jar"): _*)
@@ -1665,6 +1704,7 @@ lazy val flinkBaseComponents = (project in flink("components/base"))
     ),
   )
   .dependsOn(
+    commonComponents,
     flinkComponentsUtils % Provided,
     componentsUtils      % Provided,
     flinkTestUtils       % Test,
@@ -1692,6 +1732,33 @@ lazy val flinkKafkaComponents = (project in flink("components/kafka"))
     flinkSchemedKafkaComponentsUtils,
     commonUtils        % Provided,
     componentsUtils    % Provided
+  )
+
+// TODO: check if any flink-table / connector / format dependencies' scope can be limited
+lazy val experimentalFlinkTableApiComponents = (project in flink("components/dev-table"))
+  .settings(commonSettings)
+  .settings(assemblyNoScala("flinkTable.jar"): _*)
+  .settings(publishAssemblySettings: _*)
+  .settings(
+    name := "nussknacker-flink-table-components",
+    libraryDependencies ++= {
+      Seq(
+        "org.apache.flink" % "flink-table"                 % flinkV,
+        "org.apache.flink" % "flink-table-api-java"        % flinkV,
+        "org.apache.flink" % "flink-table-api-java-bridge" % flinkV,
+        "org.apache.flink" % "flink-table-planner-loader"  % flinkV,
+        "org.apache.flink" % "flink-table-runtime"         % flinkV,
+        "org.apache.flink" % "flink-connector-kafka"       % flinkV,
+        "org.apache.flink" % "flink-json"                  % flinkV
+      )
+    }
+  )
+  .dependsOn(
+    flinkComponentsApi   % Provided,
+    componentsApi        % Provided,
+    commonUtils          % Provided,
+    componentsUtils      % Provided,
+    flinkComponentsUtils % Provided,
   )
 
 lazy val copyClientDist = taskKey[Unit]("copy designer client")
@@ -1913,6 +1980,7 @@ lazy val modules = List[ProjectReference](
   flinkPeriodicDeploymentManager,
   flinkDevModel,
   flinkDevModelJava,
+  experimentalFlinkTableApiComponents,
   devPeriodicDM,
   defaultModel,
   openapiComponents,
@@ -1949,6 +2017,8 @@ lazy val modules = List[ProjectReference](
   designer,
   sqlComponents,
   schemedKafkaComponentsUtils,
+  commonComponents,
+  commonComponentsTests,
   flinkBaseComponents,
   flinkBaseComponentsTests,
   flinkKafkaComponents,

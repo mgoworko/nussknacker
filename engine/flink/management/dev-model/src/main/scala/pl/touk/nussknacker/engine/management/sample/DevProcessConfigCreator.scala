@@ -18,6 +18,7 @@ import pl.touk.nussknacker.engine.api.definition.{
   StringParameterEditor
 }
 import pl.touk.nussknacker.engine.api.process._
+import pl.touk.nussknacker.engine.common.components.DecisionTable
 import pl.touk.nussknacker.engine.flink.util.sink.{EmptySink, SingleValueSinkFactory}
 import pl.touk.nussknacker.engine.flink.util.source.{
   EspDeserializationSchema,
@@ -269,7 +270,6 @@ class DevProcessConfigCreator extends ProcessConfigCreator {
       globalProcessVariables,
       List.empty,
       additionalClasses,
-      LanguageConfiguration(List()),
       dictionaries = Map(
         TestDictionary.id           -> TestDictionary.definition,
         RGBDictionary.id            -> RGBDictionary.definition,
