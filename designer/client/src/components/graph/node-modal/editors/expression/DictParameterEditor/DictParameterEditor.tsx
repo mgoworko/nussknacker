@@ -1,45 +1,71 @@
-import React, { useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useAutocomplete } from "@mui/material";
 import httpService from "../../../../../../http/HttpService";
 import { getScenario } from "../../../../../../reducers/selectors/graph";
 import { useSelector } from "react-redux";
-import { debounce } from "lodash";
+import { debounce } from "@mui/material/utils";
+import { SimpleEditor } from "../Editor";
+import { ExpressionObj } from "../types";
+import { FieldError } from "../../Validators";
+import { ParamType } from "../../types";
 
-export const DictParameterEditor = (props) => {
+interface Props {
+    expressionObj: ExpressionObj;
+    onValueChange: (value: string) => void;
+    fieldErrors: FieldError[];
+    param: ParamType;
+}
+
+export const DictParameterEditor: SimpleEditor<Props> = (props: Props) => {
     const scenario = useSelector(getScenario);
 
     const [options, setOptions] = useState([]);
-    const [value, setValue] = React.useState(JSON.parse(JSON.stringify({ label: "label", key: "key" })));
+    const [value, setValue] = React.useState(() => {
+        if (!props.expressionObj.expression) {
+            return null;
+        }
+
+        return JSON.parse(JSON.stringify(props.expressionObj.expression));
+    });
     const [inputValue, setInputValue] = React.useState("");
-    const { groupedOptions, getInputProps, getOptionProps, getListboxProps } = useAutocomplete({
-        options,
-        onOpen: async (event) => {
+
+    const fetchProcessDefinitionDataDict = useCallback(
+        async (inputValue: string) => {
             const response = await httpService.fetchProcessDefinitionDataDict(
                 scenario.processingType,
                 props.param.editor.dictId,
                 inputValue,
             );
-            setOptions(response.data);
+
+            return response.data;
         },
-        isOptionEqualToValue: (option, value) => true,
+        [props.param.editor.dictId, scenario.processingType],
+    );
+
+    const debouncedUpdateOptions = useMemo(() => {
+        return debounce(async (value: string) => {
+            const fetchedOptions = await fetchProcessDefinitionDataDict(value);
+            setOptions(fetchedOptions);
+        }, 400);
+    }, [fetchProcessDefinitionDataDict]);
+
+    const { groupedOptions, getInputProps, getOptionProps, getListboxProps } = useAutocomplete({
+        options,
+        filterOptions: (x) => x,
+        onOpen: async () => {
+            const fetchedOptions = await fetchProcessDefinitionDataDict(inputValue);
+            setOptions(fetchedOptions);
+        },
+        isOptionEqualToValue: () => true,
         getOptionLabel: (option) => option.label,
-        onChange: (event, value, reason, details) => {
-            console.log("value", value);
+        onChange: (_, value) => {
             props.onValueChange(value?.key || "");
             setValue(value);
         },
         value,
         inputValue,
-        onInputChange: async (event, value, reason) => {
-            const test = debounce(async () => {
-                const response = await httpService.fetchProcessDefinitionDataDict(
-                    scenario.processingType,
-                    props.param.editor.dictId,
-                    value,
-                );
-                setOptions(response.data);
-            }, 500);
-            test();
+        onInputChange: async (event, value) => {
+            await debouncedUpdateOptions(value);
             setInputValue(value);
         },
     });
@@ -49,7 +75,9 @@ export const DictParameterEditor = (props) => {
             <input {...getInputProps()} />
             <ul {...getListboxProps()}>
                 {groupedOptions.map((option, index) => (
-                    <li {...getOptionProps({ option, index })}>{option.label}</li>
+                    <li key={index} {...getOptionProps({ option, index })}>
+                        {option.label}
+                    </li>
                 ))}
             </ul>
         </div>
