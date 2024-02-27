@@ -1901,6 +1901,8 @@ lazy val designer = (project in file("designer/server"))
         "io.dropwizard.metrics5"         % "metrics-core"                    % dropWizardV,
         "io.dropwizard.metrics5"         % "metrics-jmx"                     % dropWizardV,
         "fr.davit"                      %% "akka-http-metrics-dropwizard-v5" % "1.7.1",
+        "org.scalacheck"                %% "scalacheck"                      % scalaCheckV          % "test",
+        "com.github.erosb"               % "everit-json-schema"              % "1.14.4",
         "org.apache.flink"               % "flink-metrics-dropwizard"        % flinkV               % "test"
       ) ++ forScalaVersion(
         scalaVersion.value,
