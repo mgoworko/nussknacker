@@ -5,18 +5,13 @@ import org.scalatest.Inside.inside
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.prop.{TableDrivenPropertyChecks, TableFor2}
-import pl.touk.nussknacker.engine.api.typed.typing
-import pl.touk.nussknacker.engine.api.typed.typing.Typed
-import pl.touk.nussknacker.engine.flink.table.TestData.{
-  SimpleTypesTestCase,
-  invalidSqlStatementsAndNonCreateTableStatements
-}
+import pl.touk.nussknacker.engine.api.typed.typing.{Typed, TypingResult}
+import pl.touk.nussknacker.engine.flink.table.SqlTestData.{SimpleTypesTestCase, invalidSqlStatements}
 import pl.touk.nussknacker.engine.flink.table.extractor._
 
 class DataSourceSqlExtractorTest extends AnyFunSuite with Matchers with TableDrivenPropertyChecks {
 
   test("extracts configuration from valid sql statement") {
-    // TODO: do a table driven check to cover more cases
     val statements        = SqlStatementReader.readSql(SimpleTypesTestCase.sqlStatement)
     val dataSourceConfigs = DataSourceSqlExtractor.extractTablesFromFlinkRuntime(statements)
 
@@ -31,7 +26,7 @@ class DataSourceSqlExtractorTest extends AnyFunSuite with Matchers with TableDri
   }
 
   test("return correct error type for invalid sql statement or queries") {
-    forAll(invalidSqlStatementsAndNonCreateTableStatements) { case (statement, expectedErrorType) =>
+    forAll(invalidSqlStatements) { case (statement, expectedErrorType) =>
       val statements        = SqlStatementReader.readSql(statement)
       val dataSourceConfigs = DataSourceSqlExtractor.extractTablesFromFlinkRuntime(statements)
 
@@ -68,11 +63,11 @@ class DataSourceSqlExtractorTest extends AnyFunSuite with Matchers with TableDri
 
 }
 
-object TestData {
+object SqlTestData {
 
   import org.scalatest.prop.TableDrivenPropertyChecks._
 
-  val invalidSqlStatementsAndNonCreateTableStatements: TableFor2[String, SqlExtractionErrorType] = Table(
+  val invalidSqlStatements: TableFor2[String, SqlExtractionErrorType] = Table(
     ("statement", "expectedErrorType"),
     (
       """|CREATE TABLE testTable
@@ -126,37 +121,38 @@ object TestData {
 
   object SimpleTypesTestCase {
 
+    val tableName = "testTable"
+    val connector = "filesystem"
+
     val sqlStatement: String =
-      """|CREATE TABLE testTable
+      s"""|CREATE TABLE testTable
          |(
          |    someString  STRING,
          |    someVarChar VARCHAR(150),
          |    someInt     INT
          |) WITH (
-         |      'connector' = 'datagen'
+         |      'connector' = '$connector'
          |);""".stripMargin
 
-    val schema: DataSourceSchema = DataSourceSchema(
+    val schema: Schema = Schema(
       columns = List(
         Column("someString", DataTypes.STRING()),
         Column("someVarChar", DataTypes.VARCHAR(150)),
         Column("someInt", DataTypes.INT())
-      )
-    )
-
-    val typingResult: typing.TypedObjectTypingResult = Typed.record(
-      Map(
-        "someString"  -> Typed[String],
-        "someVarChar" -> Typed[String],
-        "someInt"     -> Typed[Integer],
+      ),
+      typingResult = Typed.record(
+        Map(
+          "someString"  -> Typed[String],
+          "someVarChar" -> Typed[String],
+          "someInt"     -> Typed[Integer],
+        )
       )
     )
 
     val expectedConfig: SqlDataSourceConfig = SqlDataSourceConfig(
-      "testTable",
-      "datagen",
+      tableName,
+      connector,
       schema,
-      typingResult,
       sqlStatement
     )
 

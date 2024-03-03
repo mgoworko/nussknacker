@@ -1,26 +1,28 @@
 package pl.touk.nussknacker.engine.flink.table.extractor
 
 import com.typesafe.scalalogging.LazyLogging
-import org.apache.flink.table.api.{EnvironmentSettings, Table, TableEnvironment, TableResult}
+import org.apache.flink.table.api.{EnvironmentSettings, TableEnvironment, TableResult}
 import org.apache.flink.table.catalog.{CatalogBaseTable, ObjectPath}
 import org.apache.flink.table.types.DataType
-import pl.touk.nussknacker.engine.api.typed.typing.{Typed, TypingResult}
-import pl.touk.nussknacker.engine.flink.table.extractor.SqlDataSourceConfig.{Connector, Format}
+import pl.touk.nussknacker.engine.api.typed.typing.TypingResult
+import pl.touk.nussknacker.engine.flink.table.extractor.SqlDataSourceConfig.Connector
 import pl.touk.nussknacker.engine.flink.table.extractor.SqlStatementReader.SqlStatement
+import pl.touk.nussknacker.engine.flink.table.extractor.TypeExtractor.extractTypedSchema
 
 import scala.util.Try
 
+// TODO: additional validation (maybe outside scope of this class' responsibility):
+//  - duplicate table names
+//  - custom validation per connector
 object DataSourceSqlExtractor extends LazyLogging {
 
   import scala.jdk.CollectionConverters._
   import scala.jdk.OptionConverters.RichOptional
 
   private val connectorKey        = "connector"
-  private val formatKey           = "format"
   private val builtInCatalogName  = "defaultCatalog"
   private val buildInDatabaseName = "defaultDatabase"
 
-  // TODO: validate duplicate table names
   def extractTablesFromFlinkRuntime(
       createTableStatements: List[SqlStatement]
   ): List[Either[SqlExtractorError, SqlDataSourceConfig]] = {
@@ -39,7 +41,7 @@ object DataSourceSqlExtractor extends LazyLogging {
      *
      * @see <a href="https://nightlies.apache.org/flink/flink-docs-release-1.18/docs/dev/table/catalogs/#registering-a-catalog">Flink docs source </a>
      */
-    val catalog = tableEnv.getCatalog(tableEnv.getCurrentCatalog).toScala match {
+    val catalog = tableEnv.getCatalog(builtInCatalogName).toScala match {
       case Some(value) => value
       case None =>
         throw new IllegalStateException(
@@ -68,20 +70,19 @@ object DataSourceSqlExtractor extends LazyLogging {
           .toRight(SqlExtractorError(TableNotCreatedOrCreatedOutsideOfContext, None))
 
         // CatalogBaseTable - contains metadata
-        tablePath                 = new ObjectPath(tableEnv.getCurrentDatabase, tableName)
+        tablePath                 = new ObjectPath(buildInDatabaseName, tableName)
         tableWithUnresolvedSchema = catalog.getTable(tablePath)
         metaData <- extractMetaData(tableWithUnresolvedSchema)
 
         // Table with resolved schema - contains resolved column types
-        tableFromEnv            = tableEnv.from(tableName)
-        (columns, typingResult) = extractSchema(tableFromEnv)
+        tableFromEnv = tableEnv.from(tableName)
+        typedSchema  = extractTypedSchema(tableFromEnv)
 
         _ <- tryExecuteStatement(s"DROP TABLE $tableName", tableEnv)
       } yield SqlDataSourceConfig(
         tableName,
         metaData.connector,
-        DataSourceSchema(columns),
-        typingResult,
+        typedSchema,
         statement
       )
     }
@@ -98,49 +99,28 @@ object DataSourceSqlExtractor extends LazyLogging {
       SqlExtractorError(StatementNotExecuted, Some(e))(sqlStatement)
     )
 
-  private final case class TableMetaData(connector: Connector, format: Format)
+  private final case class TableMetaData(connector: Connector)
 
-  // TODO: extract format - have to fail on formats that are not on classpath
   private def extractMetaData(
       tableWithMetadata: CatalogBaseTable
   )(implicit statement: SqlStatement): Either[SqlExtractorError, TableMetaData] = {
     for {
       connector <- tableWithMetadata.getOptions.asScala.get(connectorKey).toRight(SqlExtractorError(ConnectorMissing))
-      format    <- tableWithMetadata.getOptions.asScala.get(formatKey).toRight(SqlExtractorError(FormatMissing))
-    } yield TableMetaData(connector, format)
+    } yield TableMetaData(connector)
   }
-
-  private def extractSchema(tableFromEnv: Table) = {
-    val (columns, columnsTypingData) = tableFromEnv.getResolvedSchema.getColumns.asScala
-      .map { column =>
-        val name     = column.getName
-        val dataType = column.getDataType
-        (Column(name, dataType), name -> columnClassToTypingData(dataType))
-      }
-      .toList
-      .unzip
-    columns -> Typed.record(columnsTypingData.toMap)
-  }
-
-  // TODO: handle complex data types - Maps, Arrays, Rows, Raw
-  private def columnClassToTypingData(dataType: DataType) =
-    Typed.typedClass(dataType.getLogicalType.getDefaultConversion)
 
 }
 
 final case class SqlDataSourceConfig(
     tableName: String,
     connector: Connector,
-    schema: DataSourceSchema,
-    typingResult: TypingResult,
+    schema: Schema,
     sqlCreateTableStatement: SqlStatement
 )
 
 object SqlDataSourceConfig {
-  type Format    = String
   type Connector = String
 }
 
-// TODO: flatten this?
-final case class DataSourceSchema(columns: List[Column])
-final case class Column(name: String, dataType: DataType)
+final case class Schema(columns: List[Column], typingResult: TypingResult)
+final case class Column(name: String, flinkDataType: DataType)

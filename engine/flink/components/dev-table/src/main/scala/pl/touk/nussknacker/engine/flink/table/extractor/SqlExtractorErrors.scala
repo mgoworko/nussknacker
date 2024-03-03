@@ -19,17 +19,18 @@ object SqlExtractorError {
 }
 
 sealed trait SqlExtractionErrorType {
-  val message: String
+  def message: String
 }
 
 object StatementNotExecuted extends SqlExtractionErrorType {
 
   // TODO: explain our required syntax - for example we don't handle explicit catalog / db name
-  override val message: String = """
-                                   |Could not execute sql statement. The statement may be malformed. The statement has to be a CREATE TABLE statement
-                                   |according to https://nightlies.apache.org/flink/flink-docs-release-1.18/docs/dev/table/sql/create/#create-table
-                                   |syntax.
-                                   |""".stripMargin
+  override val message: String =
+    """
+      |Could not execute sql statement. The statement may be malformed. The statement has to be a CREATE TABLE statement
+      |according to https://nightlies.apache.org/flink/flink-docs-release-1.18/docs/dev/table/sql/create/#create-table
+      |syntax.
+      |""".stripMargin
 
 }
 
@@ -46,9 +47,4 @@ object TableNotCreatedOrCreatedOutsideOfContext extends SqlExtractionErrorType {
 // classpath
 object ConnectorMissing extends SqlExtractionErrorType {
   override val message: String = "Connector is missing."
-}
-
-// TODO: check when this happens
-object FormatMissing extends SqlExtractionErrorType {
-  override val message: String = "Format is missing."
 }

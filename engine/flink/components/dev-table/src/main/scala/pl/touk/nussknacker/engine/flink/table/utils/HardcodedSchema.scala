@@ -7,8 +7,6 @@ import pl.touk.nussknacker.engine.api.typed.typing.{Typed, TypingResult}
 
 object HardcodedSchema {
 
-  import scala.jdk.CollectionConverters._
-
   val stringColumnName = "someString"
   val intColumnName    = "someInt"
 
@@ -19,20 +17,13 @@ object HardcodedSchema {
     .build()
 
   val rowDataType: DataType = DataTypes.ROW(
-    DataTypes.FIELD(intColumnName, DataTypes.INT()),
     DataTypes.FIELD(stringColumnName, DataTypes.STRING()),
+    DataTypes.FIELD(intColumnName, DataTypes.INT()),
   )
 
   val typingResult: TypingResult = Typed.record(Map(intColumnName -> Typed[Integer], stringColumnName -> Typed[String]))
 
   object MapRowConversion {
-
-    def toMap(row: Row): java.util.HashMap[String, Any] = {
-      val intVal    = row.getFieldAs[Int](intColumnName)
-      val stringVal = row.getFieldAs[String](stringColumnName)
-      val fields    = Map(intColumnName -> intVal, stringColumnName -> stringVal)
-      new java.util.HashMap[String, Any](fields.asJava)
-    }
 
     def fromMap(map: java.util.Map[String, Any]): Row = {
       val stringVal: String = map.get(stringColumnName).asInstanceOf[String]
