@@ -1,6 +1,6 @@
 package pl.touk.nussknacker.ui.api
 
-import pl.touk.nussknacker.engine.api.CirceUtil._
+import cats.data.NonEmptyList
 import derevo.circe.{decoder, encoder}
 import derevo.derive
 import io.circe.generic.JsonCodec
@@ -9,31 +9,25 @@ import io.circe.{Decoder, DecodingFailure, Encoder, Json}
 import org.springframework.util.ClassUtils
 import pl.touk.nussknacker.engine.ModelData
 import pl.touk.nussknacker.engine.additionalInfo.{AdditionalInfo, MarkdownAdditionalInfo}
+import pl.touk.nussknacker.engine.api.CirceUtil._
 import pl.touk.nussknacker.engine.api.ProcessAdditionalFields
 import pl.touk.nussknacker.engine.api.definition.ParameterEditor
 import pl.touk.nussknacker.engine.api.editor.DualEditorMode
-import pl.touk.nussknacker.engine.api.graph.ProcessProperties
-import pl.touk.nussknacker.engine.api.graph.{Edge, ScenarioGraph}
+import pl.touk.nussknacker.engine.api.graph.{Edge, ProcessProperties, ScenarioGraph}
 import pl.touk.nussknacker.engine.api.process.{ProcessName, ProcessingType}
-import pl.touk.nussknacker.engine.api.typed.{TypingResultDecoder, typing}
+import pl.touk.nussknacker.engine.api.typed.TypingResultDecoder
 import pl.touk.nussknacker.engine.api.typed.typing._
+import pl.touk.nussknacker.engine.graph.evaluatedparam
 import pl.touk.nussknacker.engine.graph.expression.Expression
-import pl.touk.nussknacker.engine.graph.node.{Enricher, Filter, NodeData}
 import pl.touk.nussknacker.engine.graph.node.NodeData.nodeDataEncoder
+import pl.touk.nussknacker.engine.graph.node.{Enricher, Filter, NodeData}
+import pl.touk.nussknacker.engine.graph.service.ServiceRef
+import pl.touk.nussknacker.engine.spel.ExpressionSuggestion
 import pl.touk.nussknacker.restmodel.BaseEndpointDefinitions
 import pl.touk.nussknacker.restmodel.BaseEndpointDefinitions.SecuredEndpoint
 import pl.touk.nussknacker.restmodel.definition.{UIParameter, UIValueParameter}
 import pl.touk.nussknacker.restmodel.validation.ValidationResults.{NodeValidationError, NodeValidationErrorType}
 import pl.touk.nussknacker.security.AuthCredentials
-import pl.touk.nussknacker.ui.api.TypingDtoSchemas._
-import pl.touk.nussknacker.ui.suggester.CaretPosition2d
-import sttp.model.StatusCode.{BadRequest, NotFound, Ok}
-import sttp.tapir._
-import TapirCodecs.ScenarioNameCodec._
-import cats.data.NonEmptyList
-import pl.touk.nussknacker.engine.graph.evaluatedparam
-import pl.touk.nussknacker.engine.graph.service.ServiceRef
-import pl.touk.nussknacker.engine.spel.ExpressionSuggestion
 import pl.touk.nussknacker.ui.api.NodesApiEndpoints.Dtos.NodesError.{
   MalformedTypingResult,
   NoProcessingType,
@@ -44,11 +38,23 @@ import pl.touk.nussknacker.ui.api.NodesApiEndpoints.{
   noProcessingTypeExample,
   noScenarioExample
 }
+import pl.touk.nussknacker.ui.api.TapirCodecs.ScenarioNameCodec._
+import pl.touk.nussknacker.ui.api.TypingDtoSchemas.TypedClassSchemaHelper.typedClassTypeSchema
+import pl.touk.nussknacker.ui.api.TypingDtoSchemas.TypedDictSchemaHelper.typedDictTypeSchema
+import pl.touk.nussknacker.ui.api.TypingDtoSchemas.TypedNullSchemaHelper.typedNullTypeSchema
+import pl.touk.nussknacker.ui.api.TypingDtoSchemas.TypedObjectSchemaHelper.typedObjectTypeSchema
+import pl.touk.nussknacker.ui.api.TypingDtoSchemas.TypedObjectTypingResultSchemaHelper.typedObjectTypingResultTypeSchema
+import pl.touk.nussknacker.ui.api.TypingDtoSchemas.TypedTaggedSchemaHelper.typedTaggedTypeSchema
+import pl.touk.nussknacker.ui.api.TypingDtoSchemas.TypedUnionSchemaHelper.typedUnionTypeSchema
+import pl.touk.nussknacker.ui.api.TypingDtoSchemas.UnknownSchemaHelper.unknownTypeSchema
+import pl.touk.nussknacker.ui.api.TypingDtoSchemas._
 import pl.touk.nussknacker.ui.services.BaseHttpService.CustomAuthorizationError
+import pl.touk.nussknacker.ui.suggester.CaretPosition2d
+import sttp.model.StatusCode.{BadRequest, NotFound, Ok}
 import sttp.tapir.EndpointIO.Example
-import sttp.tapir.SchemaType.SString
+import sttp.tapir.SchemaType.{SString, SchemaWithValue}
+import sttp.tapir._
 import sttp.tapir.derevo.schema
-import sttp.tapir.generic.Configuration
 import sttp.tapir.generic.auto._
 import sttp.tapir.json.circe.jsonBody
 
@@ -778,102 +784,69 @@ object NodesApiEndpoints {
 
 object TypingDtoSchemas {
 
+  import pl.touk.nussknacker.engine.api.typed.TypingType
   import pl.touk.nussknacker.engine.api.typed.TypingType.TypingType
   import pl.touk.nussknacker.engine.api.typed.typing._
-  import pl.touk.nussknacker.engine.api.typed.TypingType
   import sttp.tapir.Schema.SName
   import sttp.tapir.SchemaType.SProductField
   import sttp.tapir.{FieldName, Schema, SchemaType}
 
   implicit lazy val typingResult: Schema[TypingResult] = {
-    implicit val conf: Configuration = sttp.tapir.generic.Configuration.default.copy(
-//      discriminator = Some("type"),
-//      toDiscriminatorValue = sName => {
-//        println("SNAME: "${sName)
-//      }
-//        sName.fullName.drop(44)
+    Schema(
+      SchemaType.SCoproduct(
+        List(
+          unknownSchema.hidden(true),
+          unknownSchema,
+          typedNullSchema,
+          typedObjectTypingResultSchema,
+          typedDictSchema,
+          typedObjectSchema,
+          typedClassSchema,
+          typedUnionSchema,
+          typedTaggedSchema
+        ),
+        None
+      ) {
+        case Unknown                              => Some(SchemaWithValue(unknownSchema, Unknown))
+        case TypedNull                            => Some(SchemaWithValue(typedNullSchema, TypedNull))
+        case typedObject: TypedObjectTypingResult => Some(SchemaWithValue(typedObjectTypingResultSchema, typedObject))
+        case typedDict: TypedDict                 => Some(SchemaWithValue(typedDictSchema, typedDict))
+        case typedWithValue: TypedObjectWithValue => Some(SchemaWithValue(typedObjectSchema, typedWithValue))
+        case typedClass: TypedClass               => Some(SchemaWithValue(typedClassSchema, typedClass))
+        case union: TypedUnion                    => Some(SchemaWithValue(typedUnionSchema, union))
+        case tagged: TypedTaggedValue             => Some(SchemaWithValue(typedTaggedSchema, tagged))
+      }
     )
-
-    val derived = // Schema.oneOfWrapped[TypingResult]
-      Schema.oneOfUsingField[TypingResult, String](_.`type`, identity)(
-        ("Unknown", unknownSchema),
-        ("TypedClass", typedClassSchema),
-        ("TypedDict", typedDictSchema),
-        ("Null", typedNullSchema)
-      )(conf, Schema.string)
-
-//
-//      Schema.oneOfWrapped[TypingResult] (
-//        sttp.tapir.generic.Configuration.default.copy(
-//          discriminator = Some("type"),
-//          toDiscriminatorValue = sName => sName.fullName
-//        )
-//      )
-
-//    derived.schemaType match {
-//      case s: SchemaType.SCoproduct[_] => derived.copy(schemaType = s.addDiscriminatorField[TypingType](
-//        FieldName("type"),
-//        Schema.derivedEnumerationValue[TypingType],
-//        Map(
-//          TypingType.Unknown.toString                  -> SchemaType.SRef(Schema.SName("#/$defs/Unknown")),
-//          TypingType.TypedNull.toString                -> SchemaType.SRef(Schema.SName("#/$defs/TypedNull")),
-////          TypingType.TypedClass.toString               -> SchemaType.SRef(Schema.SName("#/$defs/KnownTypingResult")),
-////          TypingType.TypedUnion.toString               -> SchemaType.SRef(Schema.SName("#/$defs/KnownTypingResult")),
-////          TypingType.TypedDict.toString                -> SchemaType.SRef(Schema.SName("#/$defs/KnownTypingResult")),
-////          TypingType.TypedTaggedValue.toString         -> SchemaType.SRef(Schema.SName("#/$defs/KnownTypingResult")),
-////          TypingType.TypedObjectWithValue.toString     -> SchemaType.SRef(Schema.SName("#/$defs/KnownTypingResult")),
-////          TypingType.TypedObjectTypingResult.toString  -> SchemaType.SRef(Schema.SName("#/$defs/KnownTypingResult")),
-//          TypingType.TypedClass.toString               -> SchemaType.SRef(Schema.SName("#/$defs/TypedClass")),
-//          TypingType.TypedUnion.toString               -> SchemaType.SRef(Schema.SName("#/$defs/TypedUnion")),
-//          TypingType.TypedDict.toString                -> SchemaType.SRef(Schema.SName("#/$defs/TypedDict")),
-//          TypingType.TypedTaggedValue.toString         -> SchemaType.SRef(Schema.SName("#/$defs/TypedTaggedValue")),
-//          TypingType.TypedObjectWithValue.toString     -> SchemaType.SRef(Schema.SName("#/$defs/TypedObjectWithValue")),
-//          TypingType.TypedObjectTypingResult.toString  -> SchemaType.SRef(Schema.SName("#/$defs/TypedObjectTypingResult"))
-//        )
-//      ))
-//      case _ =>
-//        derived
-//    }
-    derived
   }
-
-  //  lazy val schema: Schema[TypingResult] = Schema.derived
-
-//  implicit lazy val knownTypingResultSchema: Schema[KnownTypingResult] = {
-//    val derived = Schema.derived[KnownTypingResult]
-//
-//    derived.schemaType match {
-//        case s: SchemaType.SCoproduct[_] => derived.copy(schemaType = s.addDiscriminatorField(
-//          FieldName("type"),
-//          Schema.string,
-//          Map(
-//            TypingType.TypedClass.toString               -> SchemaType.SRef(Schema.SName("#/$defs/TypedClass")),
-//            TypingType.TypedUnion.toString               -> SchemaType.SRef(Schema.SName("#/$defs/TypedUnion")),
-//            TypingType.TypedDict.toString                -> SchemaType.SRef(Schema.SName("#/$defs/TypedDict")),
-//            TypingType.TypedTaggedValue.toString         -> SchemaType.SRef(Schema.SName("#/$defs/TypedTaggedValue")),
-//            TypingType.TypedObjectWithValue.toString     -> SchemaType.SRef(Schema.SName("#/$defs/TypedObjectWithValue")),
-//            TypingType.TypedObjectTypingResult.toString  -> SchemaType.SRef(Schema.SName("#/$defs/TypedObjectTypingResult"))
-//          )
-//        ))
-//        case _ =>
-//          derived
-//      }
-//  }
 
   implicit lazy val additionalDataValueSchema: Schema[AdditionalDataValue] = Schema.derived
 
+  object TypedObjectTypingResultSchemaHelper {
+    sealed trait types
+
+    object types {
+      case object TypedObjectTypingResult extends types
+    }
+
+    implicit val typedObjectTypingResultTypeSchema: Schema[types] = Schema.derivedEnumeration[types].defaultStringBased
+  }
+
   implicit lazy val typedObjectTypingResultSchema: Schema[TypedObjectTypingResult] = {
-    lazy val typingResultSchema: Schema[TypingResult] = typingResult
     Schema(
       SchemaType.SProduct(
-        sProductFieldForDisplayAndType :::
-          List(
-            SProductField[String, Map[String, TypingResult]](
-              FieldName("fields"),
-              Schema.schemaForMap[TypingResult](typingResultSchema),
-              _ => None
-            )
-          ) :::
+        List(
+          sProductFieldForDisplay,
+          SProductField[String, TypedObjectTypingResultSchemaHelper.types](
+            FieldName("type"),
+            typedObjectTypingResultTypeSchema,
+            _ => Some(TypedObjectTypingResultSchemaHelper.types.TypedObjectTypingResult)
+          ),
+          SProductField[String, Map[String, TypingResult]](
+            FieldName("fields"),
+            Schema.schemaForMap[TypingResult](Schema(SchemaType.SRef(SName("#")))),
+            _ => None
+          )
+        ) :::
           sProductFieldForKlassAndParams
       ),
       Some(SName("TypedObjectTypingResult"))
@@ -882,12 +855,30 @@ object TypingDtoSchemas {
       .as
   }
 
+  object TypedDictSchemaHelper {
+    sealed trait types
+
+    object types {
+      case object TypedDict extends types
+    }
+
+    implicit val typedDictTypeSchema: Schema[types] = Schema.derivedEnumeration[types].defaultStringBased
+
+  }
+
   implicit lazy val typedDictSchema: Schema[TypedDict] = {
     final case class Dict(id: String, valueType: TypedTaggedValue)
     lazy val dictSchema: Schema[Dict] = Schema.derived
     Schema(
       SchemaType.SProduct(
-        sProductFieldForDisplayAndType :::
+        List(
+          sProductFieldForDisplay,
+          SProductField[String, TypedDictSchemaHelper.types](
+            FieldName("type"),
+            typedDictTypeSchema,
+            _ => Some(TypedDictSchemaHelper.types.TypedDict)
+          ),
+        ) :::
           List(SProductField[String, Dict](FieldName("dict"), dictSchema, _ => None))
       ),
       Some(SName("TypedDict"))
@@ -899,11 +890,28 @@ object TypingDtoSchemas {
   implicit lazy val typedObjectWithDataSchema: Schema[TypedObjectWithData] =
     Schema.derived.hidden(true)
 
+  object TypedTaggedSchemaHelper {
+    sealed trait types
+
+    object types {
+      case object TypedTagged extends types
+    }
+
+    implicit val typedTaggedTypeSchema: Schema[types] = Schema.derivedEnumeration[types].defaultStringBased
+  }
+
   implicit lazy val typedTaggedSchema: Schema[TypedTaggedValue] = {
     Schema(
       SchemaType.SProduct(
-        List(SProductField[String, String](FieldName("tag"), Schema.string, tag => Some(tag))) :::
-          sProductFieldForDisplayAndType :::
+        List(
+          SProductField[String, String](FieldName("tag"), Schema.string, tag => Some(tag)),
+          sProductFieldForDisplay,
+          SProductField[String, TypedTaggedSchemaHelper.types](
+            FieldName("type"),
+            typedTaggedTypeSchema,
+            _ => Some(TypedTaggedSchemaHelper.types.TypedTagged)
+          ),
+        ) :::
           sProductFieldForKlassAndParams
       ),
       Some(SName("TypedTaggedValue"))
@@ -912,11 +920,29 @@ object TypingDtoSchemas {
       .as
   }
 
+  object TypedObjectSchemaHelper {
+    sealed trait types
+
+    object types {
+      case object TypedObject extends types
+    }
+
+    implicit val typedObjectTypeSchema: Schema[types] = Schema.derivedEnumeration[types].defaultStringBased
+
+  }
+
   implicit lazy val typedObjectSchema: Schema[TypedObjectWithValue] = {
     Schema(
       SchemaType.SProduct(
-        List(SProductField[String, Any](FieldName("value"), Schema.any, value => Some(value))) :::
-          sProductFieldForDisplayAndType :::
+        List(
+          SProductField[String, Any](FieldName("value"), Schema.any, value => Some(value)),
+          sProductFieldForDisplay,
+          SProductField[String, TypedObjectSchemaHelper.types](
+            FieldName("type"),
+            typedObjectTypeSchema,
+            _ => Some(TypedObjectSchemaHelper.types.TypedObject)
+          ),
+        ) :::
           sProductFieldForKlassAndParams
       ),
       Some(SName("TypedObjectWithValue"))
@@ -925,31 +951,116 @@ object TypingDtoSchemas {
       .as
   }
 
+  object TypedNullSchemaHelper {
+    sealed trait types
+
+    object types {
+      case object TypedNull extends types
+    }
+
+    implicit val typedNullTypeSchema: Schema[types] = Schema.derivedEnumeration[types].defaultStringBased
+
+  }
+
   implicit lazy val typedNullSchema: Schema[TypedNull.type] =
-    Schema.string.name(Schema.SName("TypedNull")).title("TypedNull")
+    Schema(
+      SchemaType.SProduct(
+        List(
+          sProductFieldForDisplay,
+          SProductField[String, TypedNullSchemaHelper.types](
+            FieldName("type"),
+            typedNullTypeSchema,
+            _ => Some(TypedNullSchemaHelper.types.TypedNull)
+          ),
+          SProductField[String, String](
+            FieldName("refClazzName"),
+            Schema(SString(), isOptional = true),
+            refClazzName => Some(refClazzName)
+          ),
+          SProductField[String, List[TypingResult]](
+            FieldName("params"),
+            Schema.schemaForIterable[TypingResult, List](
+              Schema(SchemaType.SRef(SName("#")))
+            ),
+            _ => Some(List(Unknown))
+          )
+        )
+      ),
+      Some(SName("TypedNull")),
+    )
+      .title("TypedNull")
+      .as
+
+  object UnknownSchemaHelper {
+    sealed trait types
+
+    object types {
+      case object Unknown extends types
+    }
+
+    implicit val unknownTypeSchema: Schema[types] = Schema.derivedEnumeration[types].defaultStringBased
+
+  }
 
   implicit lazy val unknownSchema: Schema[Unknown.type] =
-    Schema.string
-      .name(Schema.SName("Unknown"))
+    Schema(
+      SchemaType.SProduct(
+        List(
+          sProductFieldForDisplay,
+          SProductField[String, UnknownSchemaHelper.types](
+            FieldName("type"),
+            unknownTypeSchema,
+            _ => Some(UnknownSchemaHelper.types.Unknown)
+          ),
+          SProductField[String, String](
+            FieldName("refClazzName"),
+            Schema(SString(), isOptional = true),
+            refClazzName => Some(refClazzName)
+          ),
+          SProductField[String, List[TypingResult]](
+            FieldName("params"),
+            Schema.schemaForIterable[TypingResult, List](
+              Schema(SchemaType.SRef(SName("#")))
+            ),
+            _ => Some(List(Unknown))
+          )
+        )
+      ),
+      Some(SName("Unknown")),
+    )
       .title("Unknown")
       .as
+
+  object TypedUnionSchemaHelper {
+    sealed trait types
+
+    object types {
+      case object TypedUnion extends types
+    }
+
+    implicit val typedUnionTypeSchema: Schema[types] = Schema.derivedEnumeration[types].defaultStringBased
+
+  }
 
   implicit lazy val typedUnionSchema: Schema[TypedUnion] = {
     Schema(
       SchemaType.SProduct(
-        sProductFieldForDisplayAndType :::
-          List(
-            SProductField[String, NonEmptyList[TypingResult]](
-              FieldName("union"),
-//              schem.copy(isOptional = true),
-              Schema
-//                .schemaForIterable[TypingResult, NonEmptyList](typingResult)
-                .schemaForArray[TypingResult](typingResult)
-                .copy(isOptional = false)
-                .as,
-              _ => Some(NonEmptyList(Unknown, List.empty))
-            )
+        List(
+          sProductFieldForDisplay,
+          SProductField[String, TypedUnionSchemaHelper.types](
+            FieldName("type"),
+            typedUnionTypeSchema,
+            _ => Some(TypedUnionSchemaHelper.types.TypedUnion)
+          ),
+          SProductField[String, NonEmptyList[TypingResult]](
+            FieldName("union"),
+            Schema
+              .schemaForArray[TypingResult](Schema(SchemaType.SRef(SName("#/$defs"))))
+              .copy(isOptional = false)
+              .as,
+            _ => Some(NonEmptyList(Unknown, List.empty))
           )
+        )
       ),
       Some(Schema.SName("TypedUnion"))
     )
@@ -957,10 +1068,28 @@ object TypingDtoSchemas {
       .as
   }
 
+  object TypedClassSchemaHelper {
+    sealed trait types
+
+    object types {
+      case object TypedClass extends types
+    }
+
+    implicit val typedClassTypeSchema: Schema[types] = Schema.derivedEnumeration[types].defaultStringBased
+
+  }
+
   implicit lazy val typedClassSchema: Schema[TypedClass] = {
     Schema(
       SchemaType.SProduct(
-        sProductFieldForDisplayAndType :::
+        List(
+          sProductFieldForDisplay,
+          SProductField[String, TypedClassSchemaHelper.types](
+            FieldName("type"),
+            typedClassTypeSchema,
+            _ => Some(TypedClassSchemaHelper.types.TypedClass)
+          ),
+        ) :::
           sProductFieldForKlassAndParams
       ),
       Some(SName("TypedClass")),
@@ -969,6 +1098,13 @@ object TypingDtoSchemas {
       .as
   }
 
+  private lazy val sProductFieldForDisplay: SProductField[String] =
+    SProductField[String, String](
+      FieldName("display"),
+      Schema(SString(), isOptional = true),
+      display => Some(display)
+    )
+
   private lazy val sProductFieldForDisplayAndType: List[SProductField[String]] = {
     List(
       SProductField[String, String](
@@ -976,11 +1112,11 @@ object TypingDtoSchemas {
         Schema(SString(), isOptional = true),
         display => Some(display)
       ),
-//      SProductField[String, TypingType](
-//        FieldName("type"),
-//        Schema.derivedEnumerationValue,
-//        _ => Some(TypingType.Unknown)
-//      )
+      SProductField[String, TypingType](
+        FieldName("type"),
+        Schema.derivedEnumerationValue,
+        _ => Some(TypingType.TypedUnion)
+      )
     )
   }
 
@@ -991,7 +1127,7 @@ object TypingDtoSchemas {
       SProductField[String, List[TypingResult]](
         FieldName("params"),
         Schema.schemaForIterable[TypingResult, List](
-          Schema(SchemaType.SRef(SName("#/components/schemas/TypingResult")))
+          Schema(SchemaType.SRef(SName("#")))
         ),
         _ => Some(List(Unknown))
       )
