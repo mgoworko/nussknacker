@@ -894,7 +894,7 @@ object TypingDtoSchemas {
     sealed trait types
 
     object types {
-      case object TypedTagged extends types
+      case object TypedTaggedValue extends types
     }
 
     implicit val typedTaggedTypeSchema: Schema[types] = Schema.derivedEnumeration[types].defaultStringBased
@@ -909,7 +909,7 @@ object TypingDtoSchemas {
           SProductField[String, TypedTaggedSchemaHelper.types](
             FieldName("type"),
             typedTaggedTypeSchema,
-            _ => Some(TypedTaggedSchemaHelper.types.TypedTagged)
+            _ => Some(TypedTaggedSchemaHelper.types.TypedTaggedValue)
           ),
         ) :::
           sProductFieldForKlassAndParams
@@ -924,7 +924,7 @@ object TypingDtoSchemas {
     sealed trait types
 
     object types {
-      case object TypedObject extends types
+      case object TypedObjectWithValue extends types
     }
 
     implicit val typedObjectTypeSchema: Schema[types] = Schema.derivedEnumeration[types].defaultStringBased
@@ -940,7 +940,7 @@ object TypingDtoSchemas {
           SProductField[String, TypedObjectSchemaHelper.types](
             FieldName("type"),
             typedObjectTypeSchema,
-            _ => Some(TypedObjectSchemaHelper.types.TypedObject)
+            _ => Some(TypedObjectSchemaHelper.types.TypedObjectWithValue)
           ),
         ) :::
           sProductFieldForKlassAndParams
@@ -1055,7 +1055,7 @@ object TypingDtoSchemas {
           SProductField[String, NonEmptyList[TypingResult]](
             FieldName("union"),
             Schema
-              .schemaForArray[TypingResult](Schema(SchemaType.SRef(SName("#/$defs"))))
+              .schemaForArray[TypingResult](Schema(SchemaType.SRef(SName("#"))))
               .copy(isOptional = false)
               .as,
             _ => Some(NonEmptyList(Unknown, List.empty))
@@ -1105,23 +1105,7 @@ object TypingDtoSchemas {
       display => Some(display)
     )
 
-  private lazy val sProductFieldForDisplayAndType: List[SProductField[String]] = {
-    List(
-      SProductField[String, String](
-        FieldName("display"),
-        Schema(SString(), isOptional = true),
-        display => Some(display)
-      ),
-      SProductField[String, TypingType](
-        FieldName("type"),
-        Schema.derivedEnumerationValue,
-        _ => Some(TypingType.TypedUnion)
-      )
-    )
-  }
-
   private lazy val sProductFieldForKlassAndParams: List[SProductField[String]] = {
-//    lazy val typingResultSchema: Schema[TypingResult] = typingResult
     List(
       SProductField[String, String](FieldName("refClazzName"), Schema.string, refClazzName => Some(refClazzName)),
       SProductField[String, List[TypingResult]](
