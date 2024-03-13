@@ -1,5 +1,8 @@
 # Changelog
 
+1.15.0 (Not released yet)
+* [#5724](https://github.com/TouK/nussknacker/pull/5724) Improvements: Allow Designer to run locally with remote debugging & normalize SCALA_VERSION env param name
+
 1.14.0 (Not released yet)
 -------------------------
 * [#4287](https://github.com/TouK/nussknacker/pull/4287) [#5257](https://github.com/TouK/nussknacker/pull/5257) [#5432](https://github.com/TouK/nussknacker/pull/5432) [#5552](https://github.com/TouK/nussknacker/pull/5552) [#5645](https://github.com/TouK/nussknacker/pull/5645) Libraries bump:
