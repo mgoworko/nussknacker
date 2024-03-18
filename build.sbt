@@ -466,6 +466,7 @@ lazy val componentArtifacts = taskKey[List[(File, String)]]("component artifacts
 componentArtifacts := {
   List(
     (flinkBaseComponents / assembly).value           -> "components/flink/flinkBase.jar",
+    (flinkBaseUnboundedComponents / assembly).value  -> "components/flink/flinkBaseUnbounded.jar",
     (flinkKafkaComponents / assembly).value          -> "components/flink/flinkKafka.jar",
     (liteBaseComponents / assembly).value            -> "components/lite/liteBase.jar",
     (liteKafkaComponents / assembly).value           -> "components/lite/liteKafka.jar",
@@ -829,6 +830,7 @@ lazy val benchmarks = (project in file("benchmarks"))
     flinkSchemedKafkaComponentsUtils,
     flinkExecutor,
     flinkBaseComponents,
+    flinkBaseUnboundedComponents,
     testUtils % Test
   )
 
@@ -1009,6 +1011,7 @@ lazy val flinkComponentsTestkit = (project in utils("flink-components-testkit"))
     flinkExecutor,
     flinkTestUtils,
     flinkBaseComponents,
+    flinkBaseUnboundedComponents,
     defaultModel
   )
 
@@ -1707,10 +1710,27 @@ lazy val flinkBaseComponents = (project in flink("components/base"))
   .dependsOn(
     commonComponents,
     flinkComponentsUtils % Provided,
-    componentsUtils      % Provided,
-    flinkTestUtils       % Test,
-    flinkExecutor        % Test,
-    kafkaTestUtils       % Test
+    componentsUtils      % Provided
+  )
+
+lazy val flinkBaseUnboundedComponents = (project in flink("components/base-unbounded"))
+  .settings(commonSettings)
+  .settings(assemblyNoScala("flinkBaseUnbounded.jar"): _*)
+  .settings(publishAssemblySettings: _*)
+  .settings(
+    name := "nussknacker-flink-base-unbounded-components",
+    libraryDependencies ++= Seq(
+      "org.apache.flink"          % "flink-streaming-java" % flinkV     % Provided,
+      "org.scalatest"            %% "scalatest"            % scalaTestV % Test,
+      "com.clearspring.analytics" % "stream"               % "2.9.8"
+      // It is used only in QDigest which we don't use, while it's >20MB in size...
+        exclude ("it.unimi.dsi", "fastutil"),
+    )
+  )
+  .dependsOn(
+    commonComponents,
+    flinkComponentsUtils % Provided,
+    componentsUtils      % Provided
   )
 
 lazy val flinkBaseComponentsTests = (project in flink("components/base-tests"))
@@ -2024,6 +2044,7 @@ lazy val modules = List[ProjectReference](
   commonComponentsTests,
   flinkBaseComponents,
   flinkBaseComponentsTests,
+  flinkBaseUnboundedComponents,
   flinkKafkaComponents,
   liteComponentsApi,
   liteEngineKafkaComponentsApi,
