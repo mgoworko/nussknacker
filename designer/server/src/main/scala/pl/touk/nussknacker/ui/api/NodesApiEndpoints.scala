@@ -43,11 +43,6 @@ import pl.touk.nussknacker.ui.api.NodesApiEndpoints.Dtos.NodesError.{
   NoProcessingType,
   NoScenario
 }
-import pl.touk.nussknacker.ui.api.NodesApiEndpoints.{
-  malformedTypingResultExample,
-  noProcessingTypeExample,
-  noScenarioExample
-}
 import pl.touk.nussknacker.ui.api.TapirCodecs.ScenarioNameCodec._
 import pl.touk.nussknacker.ui.api.TypingDtoSchemas.TypedClassSchemaHelper.typedClassTypeSchema
 import pl.touk.nussknacker.ui.api.TypingDtoSchemas.TypedDictSchemaHelper.typedDictTypeSchema
@@ -505,6 +500,44 @@ class NodesApiEndpoints(auth: EndpointInput[AuthCredentials]) extends BaseEndpoi
       "StreamMetaData"
     )
 
+  private val noScenarioExample: EndpointOutput.OneOfVariant[NoScenario] =
+    oneOfVariantFromMatchType(
+      NotFound,
+      plainBody[NoScenario]
+        .example(
+          Example.of(
+            summary = Some("No scenario {scenarioName} found"),
+            value = NoScenario(ProcessName("'example scenario'"))
+          )
+        )
+    )
+
+  private val malformedTypingResultExample: EndpointOutput.OneOfVariant[MalformedTypingResult] =
+    oneOfVariantFromMatchType(
+      BadRequest,
+      plainBody[MalformedTypingResult]
+        .example(
+          Example.of(
+            summary = Some("Malformed TypingResult sent in request"),
+            value = MalformedTypingResult(
+              "Couldn't decode value 'WrongType'. Allowed values: 'TypedUnion,TypedDict,TypedObjectTypingResult,TypedTaggedValue,TypedClass,TypedObjectWithValue,TypedNull,Unknown"
+            )
+          )
+        )
+    )
+
+  private val noProcessingTypeExample: EndpointOutput.OneOfVariant[NoProcessingType] =
+    oneOfVariantFromMatchType(
+      NotFound,
+      plainBody[NoProcessingType]
+        .example(
+          Example.of(
+            summary = Some("ProcessingType type: {processingType} not found"),
+            value = NoProcessingType("'processingType'")
+          )
+        )
+    )
+
 }
 
 object NodesApiEndpoints {
@@ -765,44 +798,6 @@ object NodesApiEndpoints {
     }
 
   }
-
-  private val noScenarioExample: EndpointOutput.OneOfVariant[NoScenario] =
-    oneOfVariantFromMatchType(
-      NotFound,
-      plainBody[NoScenario]
-        .example(
-          Example.of(
-            summary = Some("No scenario {scenarioName} found"),
-            value = NoScenario(ProcessName("'example scenario'"))
-          )
-        )
-    )
-
-  private val malformedTypingResultExample: EndpointOutput.OneOfVariant[MalformedTypingResult] =
-    oneOfVariantFromMatchType(
-      BadRequest,
-      plainBody[MalformedTypingResult]
-        .example(
-          Example.of(
-            summary = Some("Malformed TypingResult sent in request"),
-            value = MalformedTypingResult(
-              "Couldn't decode value 'WrongType'. Allowed values: 'TypedUnion,TypedDict,TypedObjectTypingResult,TypedTaggedValue,TypedClass,TypedObjectWithValue,TypedNull,Unknown"
-            )
-          )
-        )
-    )
-
-  private val noProcessingTypeExample: EndpointOutput.OneOfVariant[NoProcessingType] =
-    oneOfVariantFromMatchType(
-      NotFound,
-      plainBody[NoProcessingType]
-        .example(
-          Example.of(
-            summary = Some("ProcessingType type: {processingType} not found"),
-            value = NoProcessingType("'processingType'")
-          )
-        )
-    )
 
 }
 
