@@ -1150,6 +1150,7 @@ lazy val flinkScalaUtils = (project in flink("scala-utils"))
       ) ++ flinkLibScalaDeps(scalaVersion.value, Some("provided"))
     }
   )
+  .dependsOn(testUtils % Test)
 
 lazy val flinkTestUtils = (project in flink("test-utils"))
   .settings(commonSettings)

@@ -17,8 +17,8 @@ abstract class CaseClassTypeInfoFactory[T <: Product: ClassTag] extends TypeInfo
       genericParameters: java.util.Map[String, TypeInformation[_]]
   ): TypeInformation[T] = {
     val tClass     = classTag[T].runtimeClass.asInstanceOf[Class[T]]
-    val fieldNames = tClass.getDeclaredFields.map(_.getName).toList
-    val fieldTypes = tClass.getDeclaredFields.map(_.getType).map(TypeExtractor.getForClass(_))
+    val fieldNames = tClass.getDeclaredConstructors.head.getParameters.map(_.getName).toList
+    val fieldTypes = tClass.getDeclaredConstructors.head.getParameterTypes.map(TypeExtractor.getForClass(_))
 
     new CaseClassTypeInfo[T](tClass, Array.empty, fieldTypes.toIndexedSeq, fieldNames) {
       override def createSerializer(config: ExecutionConfig): TypeSerializer[T] = {
